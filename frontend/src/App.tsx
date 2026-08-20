@@ -1,0 +1,4066 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+
+type ActiveTab = 'transaction' | 'analytics' | 'transfer' | 'recurring' | 'account' | 'category';
+type ViewMode = 'transactions' | 'analytics' | 'recurring' | 'accounts' | 'categories' | 'users';
+
+type AuthUser = { id: number; username: string; role: 'USER' | 'ADMIN'; isActive: boolean };
+
+const fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
+  const token = localStorage.getItem('projection_auth_token');
+  return window.fetch(input, {
+    ...init,
+    headers: { ...init.headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+};
+
+type Account = {
+  id: number;
+  name: string;
+  accountTypeId: number;
+  accountType?: {
+    id: number;
+    code: string;
+    name: string;
+  } | null;
+  initialBalance: number;
+  includeInDailyBudget: boolean;
+  creditLimit?: number | null;
+  repaymentAccountId?: number | null;
+  autoRepaymentEnabled?: boolean;
+  autoRepaymentOffsetDays?: number;
+  autoRepaymentGroupId?: number | null;
+  autoRepaymentSubgroupId?: number | null;
+  autoRepaymentGroup?: { id: number; name: string } | null;
+  autoRepaymentSubgroup?: { id: number; name: string } | null;
+  repaymentAccount?: {
+    id: number;
+    name: string;
+  } | null;
+};
+
+type TransactionSubgroup = {
+  id: number;
+  transactionGroupId: number;
+  code: string;
+  name: string;
+  sortOrder: number;
+  isSystem: boolean;
+  isActive: boolean;
+};
+
+type TransactionGroup = {
+  id: number;
+  code: string;
+  name: string;
+  sortOrder: number;
+  isSystem: boolean;
+  isActive: boolean;
+  subgroups: TransactionSubgroup[];
+};
+
+type CategoryFormMode = 'group' | 'subgroup';
+
+type TransactionListItem = {
+  id: number;
+  date: string;
+  info: string;
+  income: number;
+  expense: number;
+  type: string;
+  isCleared: boolean;
+  isSalaryIncome: boolean;
+  accountId?: number | null;
+  sourceAccountId?: number | null;
+  destinationAccountId?: number | null;
+  transactionGroupId?: number | null;
+  transactionSubgroupId?: number | null;
+  transactionGroupName?: string | null;
+  transactionSubgroupName?: string | null;
+};
+
+type CategoryFormState = {
+  code: string;
+  name: string;
+  sortOrder: string;
+  transactionGroupId: string;
+};
+
+const initialCategoryFormState: CategoryFormState = {
+  code: '',
+  name: '',
+  sortOrder: '0',
+  transactionGroupId: '',
+};
+
+function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setError('');
+    try {
+      const response = await window.fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!response.ok) throw new Error(await getErrorText(response));
+      const data: { token: string; user: AuthUser } = await response.json();
+      localStorage.setItem('projection_auth_token', data.token);
+      onLogin(data.user);
+    } catch (err: any) {
+      setError(err?.message ?? 'Nie udało się zalogować.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return <main className="flex min-h-screen items-center justify-center bg-gray-950 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-[calc(1rem+env(safe-area-inset-top))] text-gray-100 sm:p-6">
+    <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-xl border border-gray-700 bg-gray-900 p-6 shadow-xl">
+      <div><h1 className="text-2xl font-bold">Projekcja finansowa</h1><p className="mt-1 text-sm text-gray-400">Zaloguj się, aby przejść do swoich danych.</p></div>
+      {error && <div className="rounded border border-red-800 bg-red-950 px-3 py-2 text-sm text-red-300">{error}</div>}
+      <label className="block text-sm">Nazwa użytkownika<input required autoFocus value={username} onChange={(e) => setUsername(e.target.value)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2" /></label>
+      <label className="block text-sm">Hasło<input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2" /></label>
+      <button disabled={submitting} className="w-full rounded bg-blue-600 px-4 py-2 font-medium hover:bg-blue-500 disabled:opacity-60">{submitting ? 'Logowanie…' : 'Zaloguj się'}</button>
+    </form>
+  </main>;
+}
+
+type ProjectionRow = {
+  rowId: string;
+  transactionId: number;
+  date: string;
+  info: string;
+  type: string;
+  isCleared: boolean;
+  isSalaryIncome: boolean;
+  accountId: number | null;
+  accountName: string;
+  income: number;
+  expense: number;
+  accountBalanceAfter: number | null;
+  totalBalanceAfter: number;
+  isRecurringGenerated: boolean;
+  isAutoGenerated: boolean;
+  generationKind: string | null;
+  transactionGroupId: number | null;
+  transactionGroupName: string | null;
+  transactionSubgroupId: number | null;
+  transactionSubgroupName: string | null;
+  recurringTemplateId: number | null;
+  transferSide: 'out' | 'in' | null;
+};
+
+type ProjectionDay = {
+  date: string;
+  rows: ProjectionRow[];
+  balances: Record<string, number>;
+  totalBalance: number;
+  dailyBudgetBalance: number;
+};
+
+type ProjectionSummary = {
+  projectionStart: string;
+  projectionEnd: string;
+  nextSalaryDate: string | null;
+  daysToSalary: number;
+  totalBalance: number;
+  dailyBudgetBalance: number;
+  dailyBudget: number;
+  availableDailyBudget: number;
+  variance: number;
+};
+
+type ProjectionResponse = {
+  timeline: ProjectionDay[];
+  summary: ProjectionSummary;
+};
+
+type ProjectionDefaultRangeResponse = {
+  projectionStart: string;
+  projectionEnd: string;
+  lastSalaryDate: string | null;
+};
+
+type RecurringTemplate = {
+  id: number;
+  accountId: number;
+  info: string;
+  amount: number;
+  startDate: string;
+  endDate?: string | null;
+  multiplier: number;
+  period: 'day' | 'month' | 'year';
+  dayOfMonth?: number | null;
+  isActive?: boolean;
+  account?: { name: string };
+  transactionGroupId?: number | null;
+  transactionSubgroupId?: number | null;
+  transactionGroup?: { id: number; name: string } | null;
+  transactionSubgroup?: { id: number; name: string } | null;
+};
+
+type SettingsResponse = Record<string, string>;
+
+type FormDataState = {
+  date: string;
+  startDate: string;
+  endDate: string;
+  accountId: string;
+  sourceAccountId: string;
+  destinationAccountId: string;
+  info: string;
+  income: string;
+  expense: string;
+  amount: string;
+  frequencyMultiplier: string;
+  frequencyPeriod: 'day' | 'month' | 'year';
+  dayOfMonth: string;
+  accountName: string;
+  accountTypeId: string;
+  initialBalance: string;
+  includeInDailyBudget: boolean;
+  creditLimit: string;
+  repaymentAccountId: string;
+  autoRepaymentEnabled: boolean;
+  autoRepaymentOffsetDays: string;
+  autoRepaymentGroupId: string;
+  autoRepaymentSubgroupId: string;
+  isSalaryIncome: boolean;
+  transactionGroupId: string;
+  transactionSubgroupId: string;
+};
+
+const formatLocalDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const today = new Date();
+const monthStart = formatLocalDate(new Date(today.getFullYear(), today.getMonth(), 1));
+const monthEnd = formatLocalDate(new Date(today.getFullYear(), today.getMonth() + 1, 0));
+
+const PAST_DAYS_VISIBLE = 10;
+const FUTURE_DAYS_VISIBLE = 15;
+const EXTENDED_MONTH_THRESHOLD_DAYS = 10;
+
+const emptySummary: ProjectionSummary = {
+  projectionStart: monthStart,
+  projectionEnd: monthEnd,
+  nextSalaryDate: null,
+  daysToSalary: 0,
+  totalBalance: 0,
+  dailyBudgetBalance: 0,
+  dailyBudget: 130,
+  availableDailyBudget: 0,
+  variance: 0,
+};
+
+const initialFormData: FormDataState = {
+  date: formatLocalDate(new Date()),
+  startDate: formatLocalDate(new Date()),
+  endDate: '',
+  accountId: '',
+  sourceAccountId: '',
+  destinationAccountId: '',
+  info: '',
+  income: '',
+  expense: '',
+  amount: '',
+  frequencyMultiplier: '1',
+  frequencyPeriod: 'month',
+  dayOfMonth: '',
+  accountName: '',
+  accountTypeId: '',
+  initialBalance: '0',
+  includeInDailyBudget: true,
+  creditLimit: '',
+  repaymentAccountId: '',
+  autoRepaymentEnabled: false,
+  autoRepaymentOffsetDays: '1',
+  autoRepaymentGroupId: '',
+  autoRepaymentSubgroupId: '',
+  isSalaryIncome: false,
+  transactionGroupId: '',
+  transactionSubgroupId: '',
+};
+
+const formatCurrency = (value: number, currency = 'PLN') =>
+  new Intl.NumberFormat('pl-PL', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0));
+
+const getOperationDisplayInfo = (row: ProjectionRow) =>
+  row.type === 'transfer'
+    ? row.info.replace(/ przelew (wychodzący|przychodzący)$/, '')
+    : row.info;
+
+const getErrorText = async (res: Response) => {
+  try {
+    const text = await res.text();
+    return text || `HTTP ${res.status}`;
+  } catch {
+    return `HTTP ${res.status}`;
+  }
+};
+
+const viewModeLabels: Record<ViewMode, string> = {
+  transactions: 'Operacje',
+  analytics: 'Podsumowanie',
+  recurring: 'Cykliczne',
+  accounts: 'Konta',
+  categories: 'Kategorie',
+  users: 'Użytkownicy',
+};
+
+function EditIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current stroke-2">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5Z" />
+    </svg>
+  );
+}
+
+function DeleteIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current stroke-2">
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
+function IconButton({
+  title,
+  colorClass,
+  onClick,
+  children,
+}: {
+  title: string;
+  colorClass: string;
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className={`inline-flex h-8 w-8 items-center justify-center rounded border border-gray-700 bg-gray-800 ${colorClass} hover:bg-gray-700`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function AnalyticsBar({
+  value,
+  max,
+  colorClass = 'bg-blue-500',
+}: {
+  value: number;
+  max: number;
+  colorClass?: string;
+}) {
+  const width = max > 0 ? Math.max(4, (value / max) * 100) : 0;
+
+  return (
+    <div className="h-2 w-full rounded-full bg-gray-700">
+      <div
+        className={`h-2 rounded-full ${colorClass}`}
+        style={{ width: `${Math.min(width, 100)}%` }}
+      />
+    </div>
+  );
+}
+
+function PieDonutChart({
+  data,
+  total,
+  onSelect,
+  selectedName,
+}: {
+  data: { name: string; amount: number }[];
+  total: number;
+  onSelect?: (name: string) => void;
+  selectedName?: string | null;
+}) {
+  const size = 220;
+  const strokeWidth = 36;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+
+  const colors = [
+    '#ef4444',
+    '#f97316',
+    '#f59e0b',
+    '#84cc16',
+    '#22c55e',
+    '#14b8a6',
+    '#06b6d4',
+    '#3b82f6',
+    '#8b5cf6',
+    '#ec4899',
+    '#f43f5e',
+    '#a855f7',
+  ];
+
+  let cumulative = 0;
+
+  return (
+    <div className="flex flex-col items-center gap-4 lg:flex-row lg:items-start">
+      <div className="relative h-[220px] w-[220px] shrink-0">
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="#374151"
+            strokeWidth={strokeWidth}
+          />
+          {data.map((item, index) => {
+            const fraction = total > 0 ? item.amount / total : 0;
+            const dash = fraction * circumference;
+            const gap = circumference - dash;
+            const offset = -cumulative * circumference;
+            cumulative += fraction;
+
+            const isSelected = selectedName === item.name;
+
+            return (
+              <circle
+                key={item.name}
+                cx={size / 2}
+                cy={size / 2}
+                r={radius}
+                fill="none"
+                stroke={colors[index % colors.length]}
+                strokeWidth={isSelected ? strokeWidth + 6 : strokeWidth}
+                strokeDasharray={`${dash} ${gap}`}
+                strokeDashoffset={offset}
+                strokeLinecap="butt"
+                className={onSelect ? 'cursor-pointer transition-all duration-150' : ''}
+                onClick={() => onSelect?.(item.name)}
+              />
+            );
+          })}
+        </svg>
+
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
+          <div className="text-xs uppercase tracking-wide text-gray-400">Wydatki</div>
+          <div className="text-lg font-semibold text-white">{formatCurrency(total, 'PLN')}</div>
+          {selectedName && (
+            <div className="mt-1 max-w-[120px] text-xs text-gray-300">{selectedName}</div>
+          )}
+        </div>
+      </div>
+
+      <div className="w-full space-y-2">
+        {data.length > 0 ? (
+          data.map((item, index) => {
+            const share = total > 0 ? (item.amount / total) * 100 : 0;
+            const isSelected = selectedName === item.name;
+
+            return (
+              <button
+                key={item.name}
+                type="button"
+                onClick={() => onSelect?.(item.name)}
+                className={`flex w-full items-center justify-between gap-3 rounded border px-3 py-2 text-left transition ${
+                  isSelected
+                    ? 'border-blue-500 bg-gray-700'
+                    : 'border-gray-700 bg-gray-800 hover:bg-gray-700'
+                }`}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className="h-3 w-3 shrink-0 rounded-full"
+                    style={{ backgroundColor: colors[index % colors.length] }}
+                  />
+                  <span className="truncate text-sm text-gray-200">{item.name}</span>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="font-mono text-sm text-white">{formatCurrency(item.amount, 'PLN')}</div>
+                  <div className="text-xs text-gray-400">{share.toFixed(1)}%</div>
+                </div>
+              </button>
+            );
+          })
+        ) : (
+          <div className="text-sm text-gray-400">Brak danych.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+export default function App() {
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [isPasswordChangeOpen, setIsPasswordChangeOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [managedUsers, setManagedUsers] = useState<AuthUser[]>([]);
+  const [timeline, setTimeline] = useState<ProjectionDay[]>([]);
+  const [summary, setSummary] = useState<ProjectionSummary>(emptySummary);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [templates, setTemplates] = useState<RecurringTemplate[]>([]);
+  const [settings, setSettings] = useState<SettingsResponse>({});
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<ActiveTab>('transaction');
+  const [viewMode, setViewMode] = useState<ViewMode>('transactions');
+  const [isAccountListOpen, setIsAccountListOpen] = useState(false);
+  const [expandedCreditCardId, setExpandedCreditCardId] = useState<number | null>(null);
+  const [isViewMenuOpen, setIsViewMenuOpen] = useState(false);
+  const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
+  const [formData, setFormData] = useState<FormDataState>(initialFormData);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [editingTransactionId, setEditingTransactionId] = useState<number | null>(null);
+  const [editingTemplateId, setEditingTemplateId] = useState<number | null>(null);
+  const [editingAccountId, setEditingAccountId] = useState<number | null>(null);
+  const [dailyBudgetInput, setDailyBudgetInput] = useState('130');
+  const [isSalaryCardExpanded, setIsSalaryCardExpanded] = useState(false);
+  const [isBudgetCardExpanded, setIsBudgetCardExpanded] = useState(false);
+  const [manualNextSalaryDateInput, setManualNextSalaryDateInput] = useState('');
+  const [selectedCurrentBalanceAccountIds, setSelectedCurrentBalanceAccountIds] = useState<number[]>([]);
+  const [selectedSalaryBalanceAccountIds, setSelectedSalaryBalanceAccountIds] = useState<number[]>([]);
+  const [projectionStart, setProjectionStart] = useState('');
+  const [projectionEnd, setProjectionEnd] = useState('');
+  const [isDefaultRangeReady, setIsDefaultRangeReady] = useState(false);
+  const [transactionGroups, setTransactionGroups] = useState<TransactionGroup[]>([]);
+  const [categoryGroups, setCategoryGroups] = useState<TransactionGroup[]>([]);
+  const [showInactiveCategories, setShowInactiveCategories] = useState(true);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [categoryFormMode, setCategoryFormMode] = useState<CategoryFormMode>('group');
+  const [categoryForm, setCategoryForm] = useState<CategoryFormState>(initialCategoryFormState);
+  const [editingGroupId, setEditingGroupId] = useState<number | null>(null);
+  const [editingSubgroupId, setEditingSubgroupId] = useState<number | null>(null);
+  const [isCategoryCodeDirty, setIsCategoryCodeDirty] = useState(false);
+  const [transactions, setTransactions] = useState<TransactionListItem[]>([]);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [selectedAnalyticsGroup, setSelectedAnalyticsGroup] = useState<string | null>(null);
+  const [operationDisplayMode, setOperationDisplayMode] = useState<'window' | 'full-range'>('window');
+  const [openFilterMenu, setOpenFilterMenu] = useState<null | 'date' | 'account' | 'info' | 'cleared'>(null);
+  const [transactionFilters, setTransactionFilters] = useState<{
+    date: string[];
+    account: string[];
+    info: string[];
+    cleared: '' | 'ok' | 'nie';
+  }>({
+    date: [],
+    account: [],
+    info: [],
+    cleared: '',
+  });
+  
+  const viewMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const restoreSession = async () => {
+      if (!localStorage.getItem('projection_auth_token')) {
+        setAuthReady(true);
+        return;
+      }
+      try {
+        const response = await fetch('/api/auth/me');
+        if (!response.ok) throw new Error();
+        setAuthUser(await response.json());
+      } catch {
+        localStorage.removeItem('projection_auth_token');
+      } finally {
+        setAuthReady(true);
+      }
+    };
+    restoreSession();
+  }, []);
+
+  const fetchData = async () => {
+    try {
+      setErrorMessage('');
+
+      const [projRes, accRes, groupsRes, tempRes, settingsRes, transactionsRes] = await Promise.all([
+        fetch(`/api/projection?start=${projectionStart}&end=${projectionEnd}`),
+        fetch('/api/accounts'),
+        fetch('/api/transaction-groups'),
+        fetch('/api/recurring-templates'),
+        fetch('/api/settings'),
+        fetch('/api/transactions'),
+      ]);
+
+      if (!projRes.ok) throw new Error(await getErrorText(projRes));
+      if (!accRes.ok) throw new Error(await getErrorText(accRes));
+      if (!groupsRes.ok) throw new Error(await getErrorText(groupsRes));
+      if (!tempRes.ok) throw new Error(await getErrorText(tempRes));
+      if (!settingsRes.ok) throw new Error(await getErrorText(settingsRes));
+      if (!transactionsRes.ok) throw new Error(await getErrorText(transactionsRes));
+
+      const projData: ProjectionResponse = await projRes.json();
+      const accData: Account[] = await accRes.json();
+      const groupsData: TransactionGroup[] = await groupsRes.json();
+      const tempData: RecurringTemplate[] = await tempRes.json();
+      const settingsData: SettingsResponse = await settingsRes.json();
+      const transactionsData: TransactionListItem[] = await transactionsRes.json();
+
+      setTimeline(Array.isArray(projData.timeline) ? projData.timeline : []);
+      setSummary({
+        ...emptySummary,
+        ...projData.summary,
+        dailyBudget: Number(settingsData.daily_budget ?? projData.summary?.dailyBudget ?? 130),
+      });
+      setAccounts(accData);
+      setTransactionGroups(groupsData);
+      setTransactions(transactionsData);
+	  
+      const defaultIncludedAccountIds = accData
+        .filter((account) => {
+          if (!account.includeInDailyBudget) return false;
+
+          const isAutoRepaidCreditCard =
+            account.accountType?.code === 'credit_card' &&
+            account.autoRepaymentEnabled &&
+            account.repaymentAccountId != null;
+
+          return !isAutoRepaidCreditCard;
+        })
+        .map((account) => account.id);
+
+	  setSelectedCurrentBalanceAccountIds((prev) =>
+  	  prev.length > 0
+    	  ? prev.filter((id) => defaultIncludedAccountIds.includes(id))
+    	  : defaultIncludedAccountIds
+	  );
+
+      setSelectedCurrentBalanceAccountIds((prev) =>
+        prev.length > 0 ? prev.filter((id) => defaultIncludedAccountIds.includes(id)) : defaultIncludedAccountIds
+      );
+
+      setSelectedSalaryBalanceAccountIds((prev) => {
+        const filtered = prev.filter((id) => defaultIncludedAccountIds.includes(id));
+        return filtered.length > 0 ? filtered : defaultIncludedAccountIds;
+      });
+
+      setTemplates(tempData);
+      setSettings(settingsData);
+      setDailyBudgetInput(settingsData.daily_budget ?? '130');
+      setManualNextSalaryDateInput(settingsData.manual_next_salary_date ?? '');
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage(err?.message ?? 'Nie udało się pobrać danych z API.');
+    }
+  };
+
+  const isDateInRange = (date: string, start: string, end: string) => {
+    return date >= start && date <= end;
+  };
+
+  const fetchCategoryAdminData = async (includeInactive = showInactiveCategories) => {
+    const res = await fetch(`/api/admin/transaction-groups?includeInactive=${includeInactive ? 'true' : 'false'}`);
+    if (!res.ok) {
+      throw new Error(await getErrorText(res));
+    }
+
+    const data: TransactionGroup[] = await res.json();
+    setCategoryGroups(data);
+  };
+
+  const fetchTransactions = async () => {
+    const res = await fetch('/api/transactions');
+
+    if (!res.ok) {
+      throw new Error(await getErrorText(res));
+    }
+
+    const data: TransactionListItem[] = await res.json();
+    setTransactions(data);
+  };
+
+  useEffect(() => {
+    const loadDefaultRange = async () => {
+      try {
+        setErrorMessage('');
+        const res = await fetch('api/projection-default-range');
+        if (!res.ok) throw new Error(await getErrorText(res));
+
+        const data: ProjectionDefaultRangeResponse = await res.json();
+        setProjectionStart(data.projectionStart);
+        setProjectionEnd(data.projectionEnd);
+        setIsDefaultRangeReady(true);
+      } catch (err: any) {
+        console.error(err);
+        setErrorMessage(err?.message ?? 'Nie udało się pobrać domyślnego zakresu projekcji.');
+        setProjectionStart(monthStart);
+        setProjectionEnd(monthEnd);
+        setIsDefaultRangeReady(true);
+      }
+    };
+
+    if (authUser) loadDefaultRange();
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser || !isDefaultRangeReady || !projectionStart || !projectionEnd) return;
+    fetchData();
+  }, [authUser, isDefaultRangeReady, projectionStart, projectionEnd]);
+
+  useEffect(() => {
+    if (!successMessage) return;
+    const t = setTimeout(() => setSuccessMessage(''), 2500);
+    return () => clearTimeout(t);
+  }, [successMessage]);
+
+  useEffect(() => {
+    setManualNextSalaryDateInput(settings.manual_next_salary_date || '');
+  }, [settings]);
+
+  useEffect(() => {
+    if (!authUser || viewMode !== 'categories') return;
+
+    fetchCategoryAdminData(showInactiveCategories).catch((err: any) => {
+      console.error(err);
+      setErrorMessage(err?.message ?? 'Nie udało się pobrać kategorii.');
+    });
+  }, [authUser, viewMode, showInactiveCategories]);
+
+  const loadManagedUsers = async () => {
+    const response = await fetch('/api/admin/users');
+    if (!response.ok) throw new Error(await getErrorText(response));
+    setManagedUsers(await response.json());
+  };
+
+  useEffect(() => {
+    if (authUser?.role !== 'ADMIN' || viewMode !== 'users') return;
+    loadManagedUsers().catch((err: any) => setErrorMessage(err?.message ?? 'Nie udało się pobrać użytkowników.'));
+  }, [authUser, viewMode]);
+
+  const createManagedUser = async () => {
+    const username = window.prompt('Nazwa użytkownika:');
+    if (!username) return;
+    const password = window.prompt('Hasło początkowe (min. 8 znaków):');
+    if (!password) return;
+    try {
+      const response = await fetch('/api/admin/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+      if (!response.ok) throw new Error(await getErrorText(response));
+      await loadManagedUsers();
+    } catch (err: any) { setErrorMessage(err?.message ?? 'Nie udało się utworzyć użytkownika.'); }
+  };
+
+  const updateManagedUser = async (id: number, data: Partial<Pick<AuthUser, 'isActive' | 'role'>> & { password?: string }) => {
+    try {
+      const response = await fetch(`/api/admin/users/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+      if (!response.ok) throw new Error(await getErrorText(response));
+      await loadManagedUsers();
+    } catch (err: any) { setErrorMessage(err?.message ?? 'Nie udało się zapisać użytkownika.'); }
+  };
+
+  const availableTransactionSubgroups = useMemo<TransactionSubgroup[]>(() => {
+    if (!formData.transactionGroupId) return [];
+
+    const selectedGroup = transactionGroups.find(
+      (group) => String(group.id) === formData.transactionGroupId
+    );
+
+    return selectedGroup?.subgroups ?? [];
+  }, [transactionGroups, formData.transactionGroupId]);
+
+  const availableAutoRepaymentSubgroups = useMemo<TransactionSubgroup[]>(() => {
+    if (!formData.autoRepaymentGroupId) return [];
+
+    const selectedGroup = transactionGroups.find(
+      (group) => String(group.id) === formData.autoRepaymentGroupId,
+    );
+
+    return selectedGroup?.subgroups ?? [];
+  }, [transactionGroups, formData.autoRepaymentGroupId]);
+
+  useEffect(() => {
+    if (!formData.transactionSubgroupId) return;
+
+    const subgroupStillValid = availableTransactionSubgroups.some(
+      (subgroup) => String(subgroup.id) === formData.transactionSubgroupId,
+    );
+
+    if (!subgroupStillValid) {
+      setFormData((prev) => ({
+        ...prev,
+        transactionSubgroupId: '',
+      }));
+    }
+  }, [availableTransactionSubgroups, formData.transactionSubgroupId]);
+
+  useEffect(() => {
+    if (!formData.autoRepaymentSubgroupId) return;
+
+    const subgroupStillValid = availableAutoRepaymentSubgroups.some(
+      (subgroup) => String(subgroup.id) === formData.autoRepaymentSubgroupId,
+    );
+
+    if (!subgroupStillValid) {
+      setFormData((prev) => ({ ...prev, autoRepaymentSubgroupId: '' }));
+    }
+  }, [availableAutoRepaymentSubgroups, formData.autoRepaymentSubgroupId]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+
+      if (
+        viewMenuRef.current?.contains(target) ||
+        target.closest('[data-filter-menu]') ||
+        target.closest('[data-filter-button]')
+      ) {
+        return;
+      }
+
+      setIsViewMenuOpen(false);
+      setOpenFilterMenu(null);
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const sumSelectedBalances = (
+    balancesMap: Record<string, number> | undefined,
+    selectedIds: number[]
+  ) => {
+    if (!balancesMap) return 0;
+
+    return selectedIds.reduce((sum, accountId) => {
+      return sum + Number(balancesMap[String(accountId)] ?? 0);
+    }, 0);
+  };
+  
+  const latestDay = timeline.length > 0 ? timeline[timeline.length - 1] : null;
+
+  const todayStr = useMemo(() => formatLocalDate(new Date()), []);
+
+  const todayDay = useMemo(() => {
+    return timeline.find((day) => day.date === todayStr) ?? null;
+  }, [timeline, todayStr]);
+  
+  const balances = useMemo(() => {
+    return todayDay?.balances ?? {};
+  }, [todayDay]);
+
+  const currentTotalBalance = useMemo(() => {
+    return sumSelectedBalances(
+      todayDay?.balances as Record<string, number> | undefined,
+      selectedCurrentBalanceAccountIds
+    );
+  }, [todayDay, selectedCurrentBalanceAccountIds]);
+
+  const operationRows = useMemo(
+    () => timeline.flatMap((day) => day.rows ?? []),
+    [timeline]
+  );
+
+  const visibleOperationRows = useMemo(() => {
+    if (operationDisplayMode === 'full-range') {
+      return operationRows.filter(
+        (row) => row.date >= projectionStart && row.date <= projectionEnd
+      );
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const visibleStart = new Date(today);
+    visibleStart.setDate(visibleStart.getDate() - PAST_DAYS_VISIBLE);
+
+    const visibleEnd = new Date(today);
+    visibleEnd.setDate(visibleEnd.getDate() + FUTURE_DAYS_VISIBLE);
+
+    const toDateOnly = (value: Date) => {
+      const year = value.getFullYear();
+      const month = String(value.getMonth() + 1).padStart(2, '0');
+      const day = String(value.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    const visibleStartStr = toDateOnly(visibleStart);
+    const visibleEndStr = toDateOnly(visibleEnd);
+
+    return operationRows.filter(
+      (row) => row.date >= visibleStartStr && row.date <= visibleEndStr
+    );
+  }, [operationRows, operationDisplayMode, projectionStart, projectionEnd]);
+
+  const dateFilterOptions = useMemo(() => {
+    return Array.from(new Set(visibleOperationRows.map((row) => row.date))).sort();
+  }, [visibleOperationRows]);
+
+  const accountFilterOptions = useMemo(() => {
+    return Array.from(new Set(visibleOperationRows.map((row) => row.accountName))).sort();
+  }, [visibleOperationRows]);
+
+  const infoFilterOptions = useMemo(() => {
+    return Array.from(new Set(visibleOperationRows.map(getOperationDisplayInfo))).sort();
+  }, [visibleOperationRows]);
+
+  // Autocomplete: build options and mapping from historical info -> most frequent category/subcategory
+  const infoOptions = useMemo(() => {
+    return Array.from(new Set(transactions.map((tx) => (tx.info || '').trim()))).filter(Boolean);
+  }, [transactions]);
+
+  const infoToCategoryMap = useMemo(() => {
+    const map = new Map<string, { groupId: string; subgroupId: string }>();
+
+    const counters = new Map<string, Map<string, { count: number; groupId: string; subgroupId: string }>>();
+
+    for (const tx of transactions) {
+      const key = (tx.info || '').trim().toLowerCase();
+      if (!key) continue;
+      const pairKey = `${tx.transactionGroupId ?? ''}:${tx.transactionSubgroupId ?? ''}`;
+
+      if (!counters.has(key)) counters.set(key, new Map());
+      const inner = counters.get(key)!;
+
+      if (!inner.has(pairKey)) {
+        inner.set(pairKey, { count: 0, groupId: String(tx.transactionGroupId ?? ''), subgroupId: String(tx.transactionSubgroupId ?? '') });
+      }
+
+      inner.get(pairKey)!.count++;
+    }
+
+    for (const [key, inner] of counters.entries()) {
+      let best: { count: number; groupId: string; subgroupId: string } | null = null;
+      for (const v of inner.values()) {
+        if (!best || v.count > best.count) best = v;
+      }
+      if (best) map.set(key, { groupId: best.groupId, subgroupId: best.subgroupId });
+    }
+
+    return map;
+  }, [transactions]);
+
+  const [infoSuggestion, setInfoSuggestion] = useState<string | null>(null);
+
+  const applyCategorySuggestion = (infoText: string) => {
+    const key = infoText.trim().toLowerCase();
+    const pair = infoToCategoryMap.get(key);
+    if (pair) {
+      setFormData((prev) => ({ ...prev, transactionGroupId: pair.groupId || '', transactionSubgroupId: pair.subgroupId || '' }));
+    }
+  };
+
+  const handleInfoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setFormData((prev) => ({ ...prev, info: val }));
+
+    const trimmed = val.trim();
+    if (!trimmed) {
+      setInfoSuggestion(null);
+      return;
+    }
+
+    // Suggest first historical option that starts with typed value (case-insensitive)
+    const found = infoOptions.find((opt) => opt.toLowerCase().startsWith(trimmed.toLowerCase()) && opt.toLowerCase() !== trimmed.toLowerCase());
+    setInfoSuggestion(found ?? null);
+
+    // If exact match to history, apply category automatically
+    if (infoToCategoryMap.has(trimmed.toLowerCase())) {
+      applyCategorySuggestion(trimmed);
+    }
+  };
+
+  const acceptInfoSuggestion = () => {
+    if (!infoSuggestion) return;
+    setFormData((prev) => ({ ...prev, info: infoSuggestion }));
+    applyCategorySuggestion(infoSuggestion);
+    setInfoSuggestion(null);
+  };
+
+  const handleInfoKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!infoSuggestion) return;
+    if (e.key === 'Tab' || e.key === 'ArrowRight' || e.key === 'Enter') {
+      e.preventDefault();
+      acceptInfoSuggestion();
+    }
+  };
+
+  const filteredOperationRows = useMemo(() => {
+    return visibleOperationRows.filter((row) => {
+      if (transactionFilters.date.length > 0 && !transactionFilters.date.includes(row.date)) {
+        return false;
+      }
+
+      const matchesAccount =
+        row.type === 'transfer'
+          ? visibleOperationRows.some(
+              (candidate) =>
+                candidate.transactionId === row.transactionId &&
+                transactionFilters.account.includes(candidate.accountName),
+            )
+          : transactionFilters.account.includes(row.accountName);
+
+      if (transactionFilters.account.length > 0 && !matchesAccount) {
+        return false;
+      }
+
+      if (
+        transactionFilters.info.length > 0 &&
+        !transactionFilters.info.includes(getOperationDisplayInfo(row))
+      ) {
+        return false;
+      }
+
+      if (transactionFilters.cleared === 'ok' && !row.isCleared) {
+        return false;
+      }
+
+      if (transactionFilters.cleared === 'nie' && row.isCleared) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [visibleOperationRows, transactionFilters]);
+
+  const tableOperationRows = useMemo(() => {
+    const result: Array<{ row: ProjectionRow; transferRows?: ProjectionRow[] }> = [];
+    const handledTransferIds = new Set<number>();
+
+    for (const row of filteredOperationRows) {
+      if (row.type !== 'transfer') {
+        result.push({ row });
+        continue;
+      }
+
+      if (handledTransferIds.has(row.transactionId)) continue;
+      handledTransferIds.add(row.transactionId);
+
+      const transferRows = filteredOperationRows
+        .filter((candidate) => candidate.transactionId === row.transactionId)
+        .sort((a, b) => (a.transferSide === 'out' ? -1 : 1) - (b.transferSide === 'out' ? -1 : 1));
+
+      result.push({
+        row: transferRows.find((candidate) => candidate.transferSide === 'out') ?? transferRows[0],
+        transferRows,
+      });
+    }
+
+    return result;
+  }, [filteredOperationRows]);
+
+  const accountTypeOptions = useMemo(() => {
+    const map = new Map<number, { id: number; code: string; name: string }>();
+
+    accounts.forEach((account) => {
+      if (account.accountType?.id) {
+        map.set(account.accountType.id, account.accountType);
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.id - b.id);
+  }, [accounts]);
+
+  const selectedAccountType = useMemo(() => {
+    if (!formData.accountTypeId) return null;
+    return (
+      accountTypeOptions.find((type) => String(type.id) === formData.accountTypeId) ?? null
+    );
+  }, [accountTypeOptions, formData.accountTypeId]);
+
+  const isCreditCardForm = selectedAccountType?.code === 'credit_card';
+
+  const repaymentAccountOptions = useMemo(() => {
+    return accounts.filter((account) => {
+      if (account.id === editingAccountId) return false;
+      return account.accountType?.code !== 'credit_card';
+    });
+  }, [accounts, editingAccountId]);
+
+  const totalBalance = summary.totalBalance || 0;
+  const dailyBudgetBalance = summary.dailyBudgetBalance || 0;
+  const dailyBudget = summary.dailyBudget || Number(settings.daily_budget || 130);
+  const availableDailyBudget = summary.availableDailyBudget || 0;
+  const variance = summary.variance || 0;
+  const daysToSalary = summary.daysToSalary || 0;
+  const nextSalaryDate = summary.nextSalaryDate;
+
+  const salaryDateBalances = useMemo(() => {
+    if (!summary.nextSalaryDate) return null;
+    return timeline.find((day) => day.date === summary.nextSalaryDate) ?? null;
+  }, [timeline, summary.nextSalaryDate]);
+
+  const salaryPerAccount = useMemo(() => {
+    if (!salaryDateBalances) return [];
+
+    return accounts
+      .filter((account) => {
+        const isAutoRepaidCreditCard =
+          account.accountType?.code === 'credit_card' &&
+          account.autoRepaymentEnabled &&
+          account.repaymentAccountId != null;
+
+        return !isAutoRepaidCreditCard;
+      })
+      .map((account) => ({
+        id: account.id,
+        name: account.name,
+        balance: Number(salaryDateBalances.balances?.[String(account.id)] ?? 0),
+      }));
+  }, [accounts, salaryDateBalances]);
+
+  const salaryTotalBalance = useMemo(() => {
+    return sumSelectedBalances(
+      salaryDateBalances?.balances as Record<string, number> | undefined,
+      selectedSalaryBalanceAccountIds
+    );
+  }, [salaryDateBalances, selectedSalaryBalanceAccountIds]);
+  
+  const toggleAccountSelection = (
+    accountId: number,
+    selectedIds: number[],
+    setSelectedIds: React.Dispatch<React.SetStateAction<number[]>>
+  ) => {
+    setSelectedIds((prev) =>
+      prev.includes(accountId)
+        ? prev.filter((id) => id !== accountId)
+        : [...prev, accountId]
+    );
+  };
+
+  const varianceColorClass =
+    variance >= 0 ? 'text-green-400' : variance > -300 ? 'text-yellow-400' : 'text-red-400';
+
+  const availableBudgetColorClass =
+    availableDailyBudget > 130 ? 'text-green-400' : availableDailyBudget > 50 ? 'text-yellow-400' : 'text-red-400';
+
+  const formatDisplayDate = (dateStr: string | null) => {
+    if (!dateStr) return '—';
+    const [year, month, day] = dateStr.split('-');
+    return `${day}.${month}.${year}`;
+  };
+
+  const formatDaysLabel = (days: number) => {
+    if (days === 1) return '1 dzień';
+    if (days % 10 >= 2 && days % 10 <= 4 && (days % 100 < 12 || days % 100 > 14)) {
+      return `${days} dni`;
+    }
+    return `${days} dni`;
+  };
+
+  const analyticsTransactions = useMemo(() => {
+    return transactions.filter((tx) => isDateInRange(tx.date, projectionStart, projectionEnd));
+  }, [transactions, projectionStart, projectionEnd]);
+  
+  const slugifyCategoryCode = (value: string) => {
+    return value
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/ł/g, 'l')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+  };
+
+  const expensesByGroup = useMemo(() => {
+    const map = new Map<string, number>();
+
+    for (const tx of analyticsTransactions) {
+      const expense = Number(tx.expense || 0);
+      if (expense <= 0 || tx.type === 'transfer') continue;
+
+      const key = tx.transactionGroupName || 'Bez grupy';
+      map.set(key, (map.get(key) || 0) + expense);
+    }
+
+    return Array.from(map.entries())
+      .map(([name, amount]) => ({ name, amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [analyticsTransactions]);
+
+  const expensesBySubgroup = useMemo(() => {
+    const map = new Map<string, number>();
+
+    for (const tx of analyticsTransactions) {
+      const expense = Number(tx.expense || 0);
+      if (expense <= 0 || tx.type === 'transfer') continue;
+
+      const group = tx.transactionGroupName || 'Bez grupy';
+      const subgroup = tx.transactionSubgroupName || 'Bez podgrupy';
+      const key = `${group} / ${subgroup}`;
+
+      map.set(key, (map.get(key) || 0) + expense);
+    }
+
+    return Array.from(map.entries())
+      .map(([name, amount]) => ({ name, amount }))
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 15);
+  }, [analyticsTransactions]);
+
+  const expensesByAccount = useMemo(() => {
+    const accountNameMap = new Map(accounts.map((account) => [account.id, account.name]));
+    const map = new Map<string, number>();
+
+    for (const tx of analyticsTransactions) {
+      const expense = Number(tx.expense || 0);
+      if (expense <= 0 || tx.type === 'transfer') continue;
+      if (!tx.accountId) continue;
+
+      const accountName = accountNameMap.get(tx.accountId) || `Konto #${tx.accountId}`;
+      map.set(accountName, (map.get(accountName) || 0) + expense);
+    }
+
+    return Array.from(map.entries())
+      .map(([name, amount]) => ({ name, amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [analyticsTransactions, accounts]);
+
+  const monthlyFlow = useMemo(() => {
+    const map = new Map<string, { income: number; expense: number }>();
+
+    for (const tx of analyticsTransactions) {
+      const month = tx.date.slice(0, 7);
+      const current = map.get(month) || { income: 0, expense: 0 };
+
+      current.income += Number(tx.income || 0);
+      current.expense += Number(tx.expense || 0);
+
+      map.set(month, current);
+    }
+
+    return Array.from(map.entries())
+      .map(([month, values]) => ({
+        month,
+        income: values.income,
+        expense: values.expense,
+        net: values.income - values.expense,
+      }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+  }, [analyticsTransactions]);
+
+  const dailyExpenseTrend = useMemo(() => {
+    const map = new Map<string, number>();
+
+    for (const tx of analyticsTransactions) {
+      const expense = Number(tx.expense || 0);
+      if (expense <= 0 || tx.type === 'transfer') continue;
+
+      map.set(tx.date, (map.get(tx.date) || 0) + expense);
+    }
+
+    return Array.from(map.entries())
+      .map(([date, amount]) => ({ date, amount }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }, [analyticsTransactions]);
+
+  const getDefaultCategorySortOrder = (mode: CategoryFormMode, groupId?: string) => {
+    if (mode === 'group') {
+      if (categoryGroups.length === 0) return '10';
+      const maxSort = Math.max(...categoryGroups.map((g) => Number(g.sortOrder ?? 0)));
+      return String(maxSort + 10);
+    }
+
+    const parentGroup = categoryGroups.find((g) => String(g.id) === String(groupId));
+    if (!parentGroup || parentGroup.subgroups.length === 0) return '10';
+
+    const maxSort = Math.max(...parentGroup.subgroups.map((sg) => Number(sg.sortOrder ?? 0)));
+    return String(maxSort + 10);
+  };
+
+  const analyticsSummary = useMemo(() => {
+    let totalIncome = 0;
+    let totalExpense = 0;
+    let salaryIncome = 0;
+    let transferExpense = 0;
+
+    for (const tx of analyticsTransactions) {
+      totalIncome += Number(tx.income || 0);
+      totalExpense += Number(tx.expense || 0);
+
+      if (tx.isSalaryIncome) {
+        salaryIncome += Number(tx.income || 0);
+      }
+
+      if (tx.type === 'transfer') {
+        transferExpense += Number(tx.expense || 0);
+      }
+    }
+
+    return {
+      totalIncome,
+      totalExpense,
+      balance: totalIncome - totalExpense,
+      salaryIncome,
+      transferExpense,
+    };
+  }, [analyticsTransactions]);
+  
+  
+  const expensesBySelectedGroupSubgroup = useMemo(() => {
+  if (!selectedAnalyticsGroup) return [];
+
+  const map = new Map<string, number>();
+
+  for (const tx of analyticsTransactions) {
+    const expense = Number(tx.expense ?? 0);
+    if (expense <= 0 || tx.type === 'transfer') continue;
+    if ((tx.transactionGroupName ?? 'Bez grupy') !== selectedAnalyticsGroup) continue;
+
+    const key = tx.transactionSubgroupName ?? 'Bez podgrupy';
+    map.set(key, (map.get(key) ?? 0) + expense);
+  }
+
+  return Array.from(map.entries())
+    .map(([name, amount]) => ({ name, amount }))
+    .sort((a, b) => b.amount - a.amount);
+}, [analyticsTransactions, selectedAnalyticsGroup]);
+
+  useEffect(() => {
+    if (!selectedAnalyticsGroup) return;
+
+    const stillExists = expensesByGroup.some(
+      (item) => item.name === selectedAnalyticsGroup
+    );
+
+    if (!stillExists) {
+      setSelectedAnalyticsGroup(null);
+    }
+  }, [expensesByGroup, selectedAnalyticsGroup]);
+  
+  const totalGroupExpenses = useMemo(
+    () => expensesByGroup.reduce((sum, item) => sum + item.amount, 0),
+    [expensesByGroup]
+  );
+
+  const totalSelectedGroupExpenses = useMemo(
+    () => expensesBySelectedGroupSubgroup.reduce((sum, item) => sum + item.amount, 0),
+    [expensesBySelectedGroupSubgroup]
+  );
+
+  const openCreateModal = (tab: ActiveTab) => {
+    setActiveTab(tab);
+    setFormData({
+      ...initialFormData,
+      date: formatLocalDate(new Date()),
+      startDate: formatLocalDate(new Date()),
+    });
+    setEditingTransactionId(null);
+    setEditingTemplateId(null);
+    setEditingAccountId(null);
+    setErrorMessage('');
+    setSuccessMessage('');
+    setIsCreateMenuOpen(false);
+    setIsModalOpen(true);
+  };
+
+  const openDefaultOperationModal = () => {
+    openCreateModal('transaction');
+  };
+
+  const closeModal = () => {
+    setIsModalOpen(false);
+    setFormData(initialFormData);
+    setEditingTransactionId(null);
+    setEditingTemplateId(null);
+    setEditingAccountId(null);
+  };
+
+  const closeCategoryModal = () => {
+    setIsCategoryModalOpen(false);
+    setCategoryFormMode('group');
+    setCategoryForm(initialCategoryFormState);
+    setEditingGroupId(null);
+    setEditingSubgroupId(null);
+    setIsCategoryCodeDirty(false);
+  };
+
+  const openCreateGroupModal = () => {
+    setCategoryFormMode('group');
+    setCategoryForm({
+      ...initialCategoryFormState,
+      sortOrder: getDefaultCategorySortOrder('group'),
+    });
+    setEditingGroupId(null);
+    setEditingSubgroupId(null);
+    setIsCategoryCodeDirty(false);
+    setIsCategoryModalOpen(true);
+  };
+
+  const openEditGroupModal = (group: TransactionGroup) => {
+    setCategoryFormMode('group');
+    setCategoryForm({
+      code: group.code,
+      name: group.name,
+      sortOrder: String(group.sortOrder ?? 0),
+      transactionGroupId: '',
+    });
+    setEditingGroupId(group.id);
+    setEditingSubgroupId(null);
+    setIsCategoryCodeDirty(true);
+    setIsCategoryModalOpen(true);
+  };
+
+  const openCreateSubgroupModal = (groupId?: number) => {
+    const nextGroupId = groupId ? String(groupId) : '';
+
+    setCategoryFormMode('subgroup');
+    setCategoryForm({
+      ...initialCategoryFormState,
+      transactionGroupId: nextGroupId,
+      sortOrder: getDefaultCategorySortOrder('subgroup', nextGroupId),
+    });
+    setEditingGroupId(null);
+    setEditingSubgroupId(null);
+    setIsCategoryCodeDirty(false);
+    setIsCategoryModalOpen(true);
+  };
+
+  const openEditSubgroupModal = (groupId: number, subgroup: TransactionSubgroup) => {
+    setCategoryFormMode('subgroup');
+    setCategoryForm({
+      code: subgroup.code,
+      name: subgroup.name,
+      sortOrder: String(subgroup.sortOrder ?? 0),
+      transactionGroupId: String(groupId),
+    });
+    setEditingGroupId(null);
+    setEditingSubgroupId(subgroup.id);
+    setIsCategoryCodeDirty(true);
+    setIsCategoryModalOpen(true);
+  };
+  
+  const submitCategoryGroup = async () => {
+    const payload = {
+      code: categoryForm.code,
+      name: categoryForm.name,
+      sortOrder: Number(categoryForm.sortOrder || 0),
+    };
+
+    const method = editingGroupId ? 'PATCH' : 'POST';
+    const url = editingGroupId
+      ? `/api/admin/transaction-groups/${editingGroupId}`
+      : '/api/admin/transaction-groups';
+
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      throw new Error(await getErrorText(res));
+    }
+  };
+
+  const submitCategorySubgroup = async () => {
+    const payload = {
+      transactionGroupId: Number(categoryForm.transactionGroupId),
+      code: categoryForm.code,
+      name: categoryForm.name,
+      sortOrder: Number(categoryForm.sortOrder || 0),
+    };
+
+    const method = editingSubgroupId ? 'PATCH' : 'POST';
+    const url = editingSubgroupId
+      ? `/api/admin/transaction-subgroups/${editingSubgroupId}`
+      : '/api/admin/transaction-subgroups';
+
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      throw new Error(await getErrorText(res));
+    }
+  };
+
+  const handleCategorySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    try {
+      setIsSubmitting(true);
+      setErrorMessage('');
+
+    if (!categoryForm.name.trim()) {
+      throw new Error(
+        categoryFormMode === 'group'
+          ? 'Podaj nazwę grupy.'
+          : 'Podaj nazwę podgrupy.'
+      );
+    }
+
+    if (categoryFormMode === 'subgroup' && !categoryForm.transactionGroupId) {
+      throw new Error('Wybierz grupę nadrzędną.');
+    }
+
+
+	if (categoryFormMode === 'group') {
+        await submitCategoryGroup();
+        setSuccessMessage(editingGroupId ? 'Grupa została zaktualizowana.' : 'Grupa została dodana.');
+      } else {
+        await submitCategorySubgroup();
+        setSuccessMessage(editingSubgroupId ? 'Podgrupa została zaktualizowana.' : 'Podgrupa została dodana.');
+      }
+
+    await Promise.all([fetchData(), fetchCategoryAdminData(showInactiveCategories)]);
+      closeCategoryModal();
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage(err?.message ?? 'Nie udało się zapisać kategorii.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+  
+  const deactivateGroup = async (id: number) => {
+    try {
+      setErrorMessage('');
+
+      const res = await fetch(`/api/admin/transaction-groups/${id}`, {
+        method: 'DELETE',
+      });
+
+      if (!res.ok) {
+        throw new Error(await getErrorText(res));
+      }
+
+      await Promise.all([
+        fetchData(),
+        fetchCategoryAdminData(showInactiveCategories),
+      ]);
+
+      setSuccessMessage('Grupa została dezaktywowana.');
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage(err?.message ?? 'Nie udało się dezaktywować grupy.');
+    }
+  };
+
+  const deactivateSubgroup = async (id: number) => {
+    try {
+      setErrorMessage('');
+
+      const res = await fetch(`/api/admin/transaction-subgroups/${id}`, {
+        method: 'DELETE',
+      });
+
+      if (!res.ok) {
+        throw new Error(await getErrorText(res));
+      }
+
+      await Promise.all([
+        fetchData(),
+        fetchCategoryAdminData(showInactiveCategories),
+      ]);
+
+      setSuccessMessage('Podgrupa została dezaktywowana.');
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage(err?.message ?? 'Nie udało się dezaktywować podgrupy.');
+    }
+  };
+
+  const submitTransaction = async () => {
+    if (!formData.accountId) throw new Error('Wybierz konto.');
+    if (!formData.info.trim()) throw new Error('Podaj opis.');
+    if (!formData.date) throw new Error('Podaj datę.');
+    if (!formData.income && !formData.expense) throw new Error('Podaj wpłatę lub wypłatę.');
+
+    const payload = {
+      date: formData.date,
+      accountId: Number(formData.accountId),
+      info: formData.info,
+      income: formData.income ? Number(formData.income) : 0,
+      expense: formData.expense ? Number(formData.expense) : 0,
+      type: 'transaction',
+      isSalaryIncome: formData.isSalaryIncome,
+      transactionGroupId: formData.transactionGroupId
+        ? Number(formData.transactionGroupId)
+        : null,
+      transactionSubgroupId: formData.transactionSubgroupId
+        ? Number(formData.transactionSubgroupId)
+        : null,
+    };
+
+    const method = editingTransactionId ? 'PATCH' : 'POST';
+    const url = editingTransactionId ? `/api/transactions/${editingTransactionId}` : '/api/transactions';
+
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) throw new Error(await getErrorText(res));
+  };
+
+  const submitTransfer = async () => {
+    if (!formData.sourceAccountId) throw new Error('Wybierz konto źródłowe.');
+    if (!formData.destinationAccountId) throw new Error('Wybierz konto docelowe.');
+    if (formData.sourceAccountId === formData.destinationAccountId) {
+      throw new Error('Konta przelewu muszą być różne.');
+    }
+    if (!formData.info.trim()) throw new Error('Podaj opis.');
+    if (!formData.date) throw new Error('Podaj datę.');
+    if (!formData.amount) throw new Error('Podaj kwotę.');
+
+    const payload = {
+      date: formData.date,
+      sourceAccountId: Number(formData.sourceAccountId),
+      destinationAccountId: Number(formData.destinationAccountId),
+      info: formData.info.trim(),
+      expense: Number(formData.amount),
+      type: 'transfer',
+    };
+
+    const method = editingTransactionId ? 'PATCH' : 'POST';
+    const url = editingTransactionId ? `/api/transactions/${editingTransactionId}` : '/api/transactions';
+
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) throw new Error(await getErrorText(res));
+  };
+
+  const submitRecurring = async () => {
+    if (!formData.accountId) throw new Error('Wybierz konto.');
+    if (!formData.info.trim()) throw new Error('Podaj opis szablonu.');
+    if (!formData.amount) throw new Error('Podaj kwotę.');
+    if (!formData.startDate) throw new Error('Podaj datę startową.');
+
+    const payload = {
+      accountId: Number(formData.accountId),
+      info: formData.info.trim(),
+      amount: Number(formData.amount),
+      startDate: formData.startDate,
+      endDate: formData.endDate || undefined,
+      multiplier: Number(formData.frequencyMultiplier || 1),
+      period: formData.frequencyPeriod,
+      dayOfMonth:
+        formData.frequencyPeriod === 'month' && formData.dayOfMonth
+          ? Number(formData.dayOfMonth)
+          : undefined,
+      transactionGroupId: formData.transactionGroupId
+        ? Number(formData.transactionGroupId)
+        : null,
+      transactionSubgroupId: formData.transactionSubgroupId
+        ? Number(formData.transactionSubgroupId)
+        : null,
+      isActive: true,
+    };
+
+    const method = editingTemplateId ? 'PATCH' : 'POST';
+    const url = editingTemplateId ? `/api/recurring-templates/${editingTemplateId}` : '/api/recurring-templates';
+
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) throw new Error(await getErrorText(res));
+  };
+
+  const submitAccount = async () => {
+    if (!formData.accountName.trim()) throw new Error('Podaj nazwę konta.');
+    if (!formData.accountTypeId) throw new Error('Wybierz typ konta.');
+
+    const isCreditCard =
+      selectedAccountType?.code === 'credit_card' || selectedAccountType?.code === 'credit_card';
+
+    const payload = {
+      name: formData.accountName.trim(),
+      accountTypeId: Number(formData.accountTypeId),
+      initialBalance: Number(formData.initialBalance || 0),
+      includeInDailyBudget: formData.includeInDailyBudget,
+      creditLimit: isCreditCard ? (formData.creditLimit ? Number(formData.creditLimit) : null) : undefined,
+      repaymentAccountId: isCreditCard
+        ? (formData.repaymentAccountId ? Number(formData.repaymentAccountId) : null)
+        : undefined,
+      autoRepaymentEnabled: isCreditCard ? formData.autoRepaymentEnabled : undefined,
+      autoRepaymentOffsetDays: isCreditCard
+        ? Number(formData.autoRepaymentOffsetDays || 1)
+        : undefined,
+      autoRepaymentGroupId: isCreditCard
+        ? (formData.autoRepaymentGroupId ? Number(formData.autoRepaymentGroupId) : null)
+        : undefined,
+      autoRepaymentSubgroupId: isCreditCard
+        ? (formData.autoRepaymentSubgroupId ? Number(formData.autoRepaymentSubgroupId) : null)
+        : undefined,
+    };
+
+    const method = editingAccountId ? 'PATCH' : 'POST';
+    const url = editingAccountId ? `/api/accounts/${editingAccountId}` : '/api/accounts';
+
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) throw new Error(await getErrorText(res));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setIsSubmitting(true);
+      setErrorMessage('');
+
+      if (activeTab === 'transaction') await submitTransaction();
+      if (activeTab === 'transfer') await submitTransfer();
+      if (activeTab === 'recurring') await submitRecurring();
+      if (activeTab === 'account') await submitAccount();
+
+      await fetchData();
+      setSuccessMessage('Zapisano pomyślnie.');
+      closeModal();
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage(err?.message || 'Nie udało się zapisać danych.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const saveDailyBudget = async () => {
+    try {
+      setErrorMessage('');
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'daily_budget', value: String(Number(dailyBudgetInput || 0)) }),
+      });
+
+      if (!res.ok) throw new Error(await getErrorText(res));
+
+      await fetchData();
+      setSuccessMessage('Budżet dzienny zapisany.');
+    } catch (err) {
+      console.error(err);
+      setErrorMessage('Nie udało się zapisać budżetu dziennego.');
+    }
+  };
+
+  const saveManualNextSalaryDate = async () => {
+    try {
+      setErrorMessage('');
+
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'manual_next_salary_date',
+          value: manualNextSalaryDateInput || '',
+        }),
+      });
+
+      if (!res.ok) throw new Error(await getErrorText(res));
+
+      await fetchData();
+      setSuccessMessage('Data następnej wypłaty zapisana.');
+    } catch (err) {
+      console.error(err);
+      setErrorMessage('Nie udało się zapisać daty następnej wypłaty.');
+    }
+  };
+
+  const startEditRow = (row: ProjectionRow) => {
+    if (row.type === 'transfer') {
+      const partnerRow = timeline
+        .flatMap((day) => day.rows)
+        .find((item) => item.transactionId === row.transactionId && item.rowId !== row.rowId);
+
+      setActiveTab('transfer');
+      setFormData({
+        ...initialFormData,
+        date: row.date,
+        sourceAccountId: row.transferSide === 'out' ? String(row.accountId) : String(partnerRow?.accountId || ''),
+        destinationAccountId: row.transferSide === 'in' ? String(row.accountId) : String(partnerRow?.accountId || ''),
+        info: row.info.replace(' przelew wychodzący', '').replace(' przelew przychodzący', ''),
+        amount: String(row.transferSide === 'out' ? row.expense : row.income),
+		transactionGroupId: row.transactionGroupId ? String(row.transactionGroupId) : '',
+        transactionSubgroupId: row.transactionSubgroupId ? String(row.transactionSubgroupId) : '',
+      });
+      setEditingTransactionId(row.transactionId);
+      setEditingTemplateId(null);
+      setEditingAccountId(null);
+      setIsModalOpen(true);
+      return;
+    }
+
+    setActiveTab('transaction');
+    setFormData({
+      ...initialFormData,
+      date: row.date,
+      accountId: String(row.accountId || ''),
+      info: row.info,
+      income: row.income ? String(row.income) : '',
+      expense: row.expense ? String(row.expense) : '',
+      isSalaryIncome: row.isSalaryIncome,
+      transactionGroupId: row.transactionGroupId ? String(row.transactionGroupId) : '',
+      transactionSubgroupId: row.transactionSubgroupId ? String(row.transactionSubgroupId) : '',
+    });
+    setEditingTransactionId(row.transactionId);
+    setEditingTemplateId(null);
+    setEditingAccountId(null);
+    setIsModalOpen(true);
+  };
+
+  const startEditTemplate = (template: RecurringTemplate) => {
+    setActiveTab('recurring');
+    setFormData({
+      ...initialFormData,
+      accountId: String(template.accountId),
+      info: template.info,
+      amount: String(template.amount),
+      startDate: String(template.startDate).split('T')[0],
+      endDate: template.endDate ? String(template.endDate).split('T')[0] : '',
+      frequencyMultiplier: String(template.multiplier || 1),
+      frequencyPeriod: template.period,
+      dayOfMonth: template.dayOfMonth ? String(template.dayOfMonth) : '',
+      transactionGroupId: template.transactionGroupId ? String(template.transactionGroupId) : '',
+      transactionSubgroupId: template.transactionSubgroupId ? String(template.transactionSubgroupId) : '',
+    });
+    setEditingTemplateId(template.id);
+    setEditingTransactionId(null);
+    setEditingAccountId(null);
+    setIsModalOpen(true);
+  };
+
+  const startEditAccount = (account: Account) => {
+    setActiveTab('account');
+    setFormData({
+      ...initialFormData,
+      accountName: account.name,
+      accountTypeId: String(account.accountTypeId),
+      initialBalance: String(account.initialBalance),
+      includeInDailyBudget: account.includeInDailyBudget,
+      creditLimit: account.creditLimit != null ? String(account.creditLimit) : '',
+      repaymentAccountId: account.repaymentAccountId != null ? String(account.repaymentAccountId) : '',
+      autoRepaymentEnabled: account.autoRepaymentEnabled ?? false,
+      autoRepaymentOffsetDays:
+        account.autoRepaymentOffsetDays != null ? String(account.autoRepaymentOffsetDays) : '1',
+      autoRepaymentGroupId:
+        account.autoRepaymentGroupId != null ? String(account.autoRepaymentGroupId) : '',
+      autoRepaymentSubgroupId:
+        account.autoRepaymentSubgroupId != null ? String(account.autoRepaymentSubgroupId) : '',
+    });
+    setEditingAccountId(account.id);
+    setEditingTransactionId(null);
+    setEditingTemplateId(null);
+    setIsModalOpen(true);
+  };
+
+  const toggleCleared = async (id: number) => {
+    try {
+      const res = await fetch(`/api/transactions/${id}/toggle-clear`, { method: 'PATCH' });
+      if (!res.ok) throw new Error('Toggle failed');
+      await fetchData();
+    } catch (err) {
+      console.error(err);
+      setErrorMessage('Nie udało się zmienić statusu Rozl.');
+    }
+  };
+
+  const handleDeleteTransaction = async (id: number) => {
+    if (!window.confirm('Czy na pewno usunąć tę transakcję?')) return;
+    try {
+      const res = await fetch(`/api/transactions/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Delete failed');
+      await fetchData();
+    } catch (err) {
+      console.error(err);
+      setErrorMessage('Nie udało się usunąć transakcji.');
+    }
+  };
+
+  const handleDeleteTemplate = async (id: number) => {
+    if (!window.confirm('Czy na pewno usunąć ten szablon cykliczny?')) return;
+    try {
+      const res = await fetch(`/api/recurring-templates/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Delete failed');
+      await fetchData();
+    } catch (err) {
+      console.error(err);
+      setErrorMessage('Nie udało się usunąć szablonu cyklicznego.');
+    }
+  };
+
+  const handleDeleteAccount = async (id: number) => {
+    if (!window.confirm('Czy na pewno usunąć to konto?')) return;
+    try {
+      const res = await fetch(`/api/accounts/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(await getErrorText(res));
+      await fetchData();
+    } catch (err) {
+      console.error(err);
+      setErrorMessage('Nie udało się usunąć konta.');
+    }
+  };
+
+  const accountTypeLabel = (account: Account) => {
+    return account.accountType?.name ?? `Typ #${account.accountTypeId}`;
+  };
+
+  const changeOwnPassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      const response = await fetch('/api/auth/change-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      if (!response.ok) throw new Error(await getErrorText(response));
+      localStorage.removeItem('projection_auth_token');
+      setAuthUser(null);
+      setIsPasswordChangeOpen(false);
+      setCurrentPassword('');
+      setNewPassword('');
+    } catch (err: any) {
+      setErrorMessage(err?.message ?? 'Nie udało się zmienić hasła.');
+    }
+  };
+
+  const logout = async () => {
+    try { await fetch('/api/auth/logout', { method: 'POST' }); } finally {
+      localStorage.removeItem('projection_auth_token');
+      setAuthUser(null);
+      setIsDefaultRangeReady(false);
+    }
+  };
+
+  if (!authReady) return <main className="flex min-h-screen items-center justify-center bg-gray-950 text-gray-300">Sprawdzanie sesji…</main>;
+  if (!authUser) return <LoginScreen onLogin={(user) => { setAuthUser(user); setIsDefaultRangeReady(false); }} />;
+
+  return (
+    <div className="min-h-screen bg-gray-950 pt-[env(safe-area-inset-top)] text-gray-100">
+      <div className="mx-auto max-w-7xl space-y-5 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:space-y-6 sm:p-6">
+        <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">Projekcja finansowa</h1>
+            <p className="mt-1 text-gray-400">
+              Konta, transakcje, przelewy, płatności cykliczne i projekcja salda.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-3 md:items-end">
+            <div className="flex flex-wrap items-center justify-end gap-2 text-sm text-gray-300">
+              <span>{authUser.username}{authUser.role === 'ADMIN' ? ' · administrator' : ''}</span>
+              <button type="button" onClick={() => setIsPasswordChangeOpen(true)} className="rounded border border-gray-700 px-3 py-1 hover:bg-gray-800">Zmień hasło</button>
+              <button type="button" onClick={logout} className="rounded border border-gray-700 px-3 py-1 hover:bg-gray-800">Wyloguj</button>
+            </div>
+            <div className="flex gap-3 md:flex-row">
+            <div className="flex gap-2">
+              <input
+                type="date"
+                className="rounded border border-gray-700 bg-gray-800 px-3 py-2"
+                value={projectionStart}
+                onChange={(e) => setProjectionStart(e.target.value)}
+              />
+              <input
+                type="date"
+                className="rounded border border-gray-700 bg-gray-800 px-3 py-2"
+                value={projectionEnd}
+                onChange={(e) => setProjectionEnd(e.target.value)}
+              />
+            </div>
+            <button
+              onClick={() => {
+                setOperationDisplayMode('full-range');
+                fetchData();
+              }}
+              className="rounded bg-blue-600 px-4 py-2 hover:bg-blue-500"
+              type="button"
+            >
+              Odśwież
+            </button>
+            </div>
+          </div>
+        </header>
+		
+		<div className="flex flex-wrap gap-2">
+		  <button
+    		type="button"
+    		onClick={() => setOperationDisplayMode('window')}
+    		className={`rounded px-3 py-2 ${
+      		operationDisplayMode === 'window'
+        		? 'bg-blue-600 text-white'
+        		: 'border border-gray-700 bg-gray-800 text-gray-200 hover:bg-gray-700'
+    		}`}
+  		>
+    		Widok skrócony
+  		</button>
+  		<button
+    		type="button"
+    		onClick={() => setOperationDisplayMode('full-range')}
+    		className={`rounded px-3 py-2 ${
+      		operationDisplayMode === 'full-range'
+        		? 'bg-blue-600 text-white'
+        		: 'border border-gray-700 bg-gray-800 text-gray-200 hover:bg-gray-700'
+    		}`}
+  		>
+    		Pełen zakres
+  		</button>
+		</div>
+
+        {errorMessage && (
+          <div className="rounded-lg border border-red-800 bg-red-950 px-4 py-3 text-red-300">
+            {errorMessage}
+          </div>
+        )}
+
+        {successMessage && (
+          <div className="rounded-lg border border-green-800 bg-green-950 px-4 py-3 text-green-300">
+            {successMessage}
+          </div>
+        )}
+
+        {isPasswordChangeOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <form onSubmit={changeOwnPassword} className="w-full max-w-sm space-y-4 rounded-lg border border-gray-700 bg-gray-900 p-5 shadow-xl">
+              <h2 className="text-lg font-semibold">Zmiana hasła</h2>
+              <label className="block text-sm">Obecne hasło<input required type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="mt-1 w-full rounded bg-gray-800 px-3 py-2" /></label>
+              <label className="block text-sm">Nowe hasło (min. 8 znaków)<input required minLength={8} type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="mt-1 w-full rounded bg-gray-800 px-3 py-2" /></label>
+              <div className="flex justify-end gap-2"><button type="button" onClick={() => setIsPasswordChangeOpen(false)} className="rounded border border-gray-700 px-3 py-2">Anuluj</button><button className="rounded bg-blue-600 px-3 py-2">Zapisz</button></div>
+            </form>
+          </div>
+        )}
+
+        <div className="text-sm text-gray-400">
+          {operationDisplayMode === 'window'
+            ? `Widoczne operacje: ostatnie ${PAST_DAYS_VISIBLE} dni i najbliższe ${FUTURE_DAYS_VISIBLE} dni.`
+            : `Widoczne operacje z pełnego zakresu projekcji: ${projectionStart} -> ${projectionEnd}.`}
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+            <button
+              type="button"
+              onClick={() => setIsAccountListOpen((prev) => !prev)}
+              className="block w-full cursor-pointer text-left"
+            >
+              <h3 className="text-sm text-gray-400">Saldo całkowite</h3>
+              <p className="text-2xl font-bold">{formatCurrency(currentTotalBalance ?? 0, 'PLN')}</p>
+            </button>
+
+            {isAccountListOpen && (
+              <div className="mt-2 space-y-1 border-t border-gray-700 pt-2">
+                {accounts.map((acc) => {
+                  const balance = Number((balances as any)?.[acc.id] ?? 0);
+                  const isCreditCard = acc.accountType?.code === 'credit_card';
+                  const creditLimit = Number(acc.creditLimit ?? 0);
+                  const availableCredit = Math.max(0, Math.min(creditLimit, creditLimit + balance));
+                  const isCreditCardExpanded = expandedCreditCardId === acc.id;
+
+                  return (
+                    <div key={acc.id} className="rounded py-1 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <label className="flex min-w-0 items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedCurrentBalanceAccountIds.includes(acc.id)}
+                            onChange={() =>
+                              toggleAccountSelection(
+                                acc.id,
+                                selectedCurrentBalanceAccountIds,
+                                setSelectedCurrentBalanceAccountIds
+                              )
+                            }
+                          />
+                          <span className="truncate text-gray-400">{acc.name}</span>
+                        </label>
+
+                        {isCreditCard ? (
+                          <button
+                            type="button"
+                            onClick={() => setExpandedCreditCardId(isCreditCardExpanded ? null : acc.id)}
+                            className="shrink-0 rounded px-1 hover:bg-gray-700"
+                            title="Pokaż limit karty"
+                          >
+                            {formatCurrency(balance, 'PLN')}
+                          </button>
+                        ) : (
+                          <span className="shrink-0">{formatCurrency(balance, 'PLN')}</span>
+                        )}
+                      </div>
+
+                      {isCreditCardExpanded && acc.creditLimit != null && (
+                        <div className="ml-6 mt-1 flex items-center justify-between text-xs text-gray-400">
+                          <span>dostępny limit:</span>
+                          <span className="font-medium text-emerald-400">{formatCurrency(availableCredit, 'PLN')}</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div
+            className="cursor-pointer rounded-lg border border-gray-700 bg-gray-800 p-4"
+            onClick={() => setIsSalaryCardExpanded((prev) => !prev)}
+          >
+            <h3 className="text-sm text-gray-400">Saldo na dzień następnej wypłaty</h3>
+            <p className="text-2xl font-bold">{formatCurrency(salaryTotalBalance, 'PLN')}</p>
+
+            {isSalaryCardExpanded && (
+              <div className="mt-3 space-y-2 border-t border-gray-700 pt-3 text-sm">
+                {salaryPerAccount.length > 0 ? (
+                  salaryPerAccount.map((item) => (
+                    <label key={item.id} className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedSalaryBalanceAccountIds.includes(item.id)}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            toggleAccountSelection(
+                              item.id,
+                              selectedSalaryBalanceAccountIds,
+                              setSelectedSalaryBalanceAccountIds
+                            );
+                          }}
+                        />
+                        <span className="text-gray-300">{item.name}</span>
+                      </div>
+
+                      <span className="font-medium">{formatCurrency(item.balance, 'PLN')}</span>
+                    </label>
+                  ))
+                ) : (
+                  <div className="text-gray-400">Brak danych per konto dla dnia wypłaty.</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div
+            className="cursor-pointer rounded-lg border border-gray-700 bg-gray-800 p-4"
+            onClick={() => setIsBudgetCardExpanded((prev) => !prev)}
+          >
+            <div className="flex items-start justify-between">
+              <h3 className="text-sm text-gray-400">Nad / pod kreską</h3>
+              <p className={`text-2xl font-bold ${varianceColorClass}`}>{formatCurrency(variance, 'PLN')}</p>
+            </div>
+
+            <div className="mt-3 border-t border-gray-700 pt-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-300">Dostępny budżet dzienny</span>
+                <span className={`font-semibold ${availableBudgetColorClass}`}>
+                  {formatCurrency(availableDailyBudget, 'PLN')}
+                </span>
+              </div>
+            </div>
+
+            {isBudgetCardExpanded && (
+              <div
+                className="mt-3 space-y-3 border-t border-gray-700 pt-3 text-sm"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-300">Liczba dni do wypłaty</span>
+                  <span>{daysToSalary}</span>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-gray-300">Następna wypłata</div>
+                  <div className="flex gap-2">
+                    <input
+                      type="date"
+                      className="w-full rounded bg-gray-700 px-3 py-2"
+                      value={manualNextSalaryDateInput}
+                      onChange={(e) => setManualNextSalaryDateInput(e.target.value)}
+                    />
+                    <button
+                      onClick={saveManualNextSalaryDate}
+                      type="button"
+                      className="rounded bg-blue-600 px-4 py-2 hover:bg-blue-500"
+                    >
+                      Zapisz
+                    </button>
+                  </div>
+                  <div className="text-xs text-gray-400">Aktualnie: {formatDisplayDate(nextSalaryDate)}</div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-gray-300">Zadeklarowany budżet dzienny</div>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="w-full rounded bg-gray-700 px-3 py-2"
+                      value={dailyBudgetInput}
+                      onChange={(e) => setDailyBudgetInput(e.target.value)}
+                    />
+                    <button
+                      onClick={saveDailyBudget}
+                      type="button"
+                      className="rounded bg-emerald-600 px-4 py-2 hover:bg-emerald-500"
+                    >
+                      Zapisz
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="sticky top-[env(safe-area-inset-top)] z-40 -mx-4 flex flex-col gap-3 border-y border-gray-800 bg-gray-950/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:flex-row md:items-center md:justify-between">
+          {viewMode === 'transactions' && (
+            <div className="flex min-w-0 flex-wrap gap-2">
+              <div className="rounded border border-gray-700 bg-gray-900 px-3 py-2">
+                <div className="text-xs text-gray-400">Saldo bieżące</div>
+                <div className="whitespace-nowrap font-semibold">
+                  {formatCurrency(currentTotalBalance ?? 0, 'PLN')}
+                </div>
+              </div>
+              <div className="rounded border border-gray-700 bg-gray-900 px-3 py-2">
+                <div className="text-xs text-gray-400">
+                  Prognoza na wypłatę{nextSalaryDate ? ` (${formatDisplayDate(nextSalaryDate)})` : ''}
+                </div>
+                <div className="whitespace-nowrap font-semibold">
+                  {formatCurrency(salaryTotalBalance, 'PLN')}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="relative w-full md:w-auto" ref={viewMenuRef}>
+            <button
+              type="button"
+              onClick={() => setIsViewMenuOpen((prev) => !prev)}
+              className="w-full rounded border border-gray-700 bg-gray-800 px-4 py-2 hover:bg-gray-700 md:w-auto"
+            >
+              Widok: {viewModeLabels[viewMode]} ▾
+            </button>
+
+            {isViewMenuOpen && (
+              <div className="absolute z-20 mt-2 w-48 rounded-lg border border-gray-700 bg-gray-900 shadow-lg">
+                {(Object.keys(viewModeLabels) as ViewMode[]).filter((mode) => mode !== 'users' || authUser.role === 'ADMIN').map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => {
+                      setViewMode(mode);
+                      setIsViewMenuOpen(false);
+                    }}
+                    className={`block w-full px-4 py-2 text-left hover:bg-gray-800 ${
+                      viewMode === mode ? 'text-blue-400' : 'text-gray-100'
+                    }`}
+                  >
+                    {viewModeLabels[mode]}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div
+            className="relative flex w-full items-stretch self-stretch md:w-auto md:self-end"
+            onMouseEnter={() => setIsCreateMenuOpen(true)}
+            onMouseLeave={() => setIsCreateMenuOpen(false)}
+          >
+            <button
+              type="button"
+              onClick={openDefaultOperationModal}
+              className="flex-1 rounded-l bg-blue-600 px-4 py-2 hover:bg-blue-500 md:flex-none"
+            >
+              Nowa operacja
+            </button>
+            <button
+              type="button"
+              className="rounded-r border-l border-blue-400/40 bg-blue-600 px-3 py-2 hover:bg-blue-500"
+              aria-label="Pokaż dodatkowe opcje"
+            >
+              ▾
+            </button>
+
+            {isCreateMenuOpen && (
+              <div className="absolute right-0 top-full z-20 mt-2 w-48 rounded-lg border border-gray-700 bg-gray-900 shadow-lg">
+                <button
+                  type="button"
+                  onClick={() => openCreateModal('transfer')}
+                  className="block w-full px-4 py-2 text-left hover:bg-gray-800"
+                >
+                  Przelew
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openCreateModal('recurring')}
+                  className="block w-full px-4 py-2 text-left hover:bg-gray-800"
+                >
+                  Cykliczne
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openCreateModal('account')}
+                  className="block w-full px-4 py-2 text-left hover:bg-gray-800"
+                >
+                  Konto
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+          {viewMode === 'analytics' && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+                  <div className="text-sm text-gray-400">Wpływy</div>
+                  <div className="mt-2 text-2xl font-bold text-green-400">
+                    {formatCurrency(analyticsSummary.totalIncome, 'PLN')}
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+                  <div className="text-sm text-gray-400">Wydatki</div>
+                  <div className="mt-2 text-2xl font-bold text-red-400">
+                    {formatCurrency(analyticsSummary.totalExpense, 'PLN')}
+                  </div>
+                </div>
+          
+                <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+                  <div className="text-sm text-gray-400">Bilans</div>
+                  <div
+                    className={`mt-2 text-2xl font-bold ${
+                      analyticsSummary.balance >= 0 ? 'text-green-400' : 'text-red-400'
+                    }`}
+                  >
+                    {formatCurrency(analyticsSummary.balance, 'PLN')}
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+                  <div className="text-sm text-gray-400">Wpływy z wypłat</div>
+                  <div className="mt-2 text-2xl font-bold text-emerald-300">
+                    {formatCurrency(analyticsSummary.salaryIncome, 'PLN')}
+                  </div>
+                </div>
+              </div>
+
+
+              <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <h3 className="text-lg font-semibold">Wydatki wg grup</h3>
+                  {selectedAnalyticsGroup && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedAnalyticsGroup(null)}
+                      className="rounded border border-gray-600 px-3 py-1 text-sm hover:bg-gray-700"
+                    >
+                      Wyczyść wybór
+                    </button>
+                  )}
+                </div>
+
+                {expensesByGroup.length > 0 ? (
+                  <PieDonutChart
+                    data={expensesByGroup}
+                    total={totalGroupExpenses}
+                    selectedName={selectedAnalyticsGroup}
+                    onSelect={(name) =>
+                      setSelectedAnalyticsGroup((prev) => (prev === name ? null : name))
+                    }
+                  />
+                ) : (
+                  <div className="text-sm text-gray-400">Brak wydatków w wybranym zakresie.</div>
+                )}
+              </section>
+
+              <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <h3 className="text-lg font-semibold">
+                    {selectedAnalyticsGroup
+                      ? `Podgrupy: ${selectedAnalyticsGroup}`
+                      : 'Podgrupy kosztów'}
+                  </h3>
+                  {selectedAnalyticsGroup && (
+                    <div className="text-sm text-gray-400">
+                      Szczegóły dla wybranej grupy
+                    </div>
+                  )}
+                </div>
+
+                {selectedAnalyticsGroup ? (
+                  expensesBySelectedGroupSubgroup.length > 0 ? (
+                    <PieDonutChart
+                      data={expensesBySelectedGroupSubgroup}
+                      total={totalSelectedGroupExpenses}
+                    />
+                  ) : (
+                    <div className="text-sm text-gray-400">
+                      Brak danych o podgrupach dla tej grupy.
+                    </div>
+                  )
+                ) : (
+                  <div className="text-sm text-gray-400">
+                    Kliknij grupę na wykresie powyżej, aby zobaczyć rozbicie na podgrupy.
+                  </div>
+                )}
+              </section>
+
+
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+                  <h3 className="mb-4 text-lg font-semibold">Wydatki wg grup</h3>
+                  <div className="space-y-3">
+                    {expensesByGroup.length > 0 ? (
+                      expensesByGroup.slice(0, 10).map((item) => (
+                        <div key={item.name} className="space-y-1">
+                          <div className="flex items-center justify-between gap-4 text-sm">
+                            <span>{item.name}</span>
+                            <span className="font-mono">{formatCurrency(item.amount, 'PLN')}</span>
+                          </div>
+                          <AnalyticsBar
+                            value={item.amount}
+                            max={expensesByGroup[0]?.amount ?? 0}
+                            colorClass="bg-red-500"
+                          />
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-sm text-gray-400">Brak wydatków w wybranym zakresie.</div>
+                    )}
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+                  <h3 className="mb-4 text-lg font-semibold">Wydatki wg kont</h3>
+                  <div className="space-y-3">
+                    {expensesByAccount.length > 0 ? (
+                      expensesByAccount.map((item) => (
+                        <div key={item.name} className="space-y-1">
+                          <div className="flex items-center justify-between gap-4 text-sm">
+                            <span>{item.name}</span>
+                            <span className="font-mono">{formatCurrency(item.amount, 'PLN')}</span>
+                          </div>
+                          <AnalyticsBar
+                            value={item.amount}
+                            max={expensesByAccount[0]?.amount ?? 0}
+                            colorClass="bg-amber-500"
+                          />
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-sm text-gray-400">Brak danych o wydatkach per konto.</div>
+                    )}
+                  </div>
+                </section>
+              </div>
+
+              <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+                <h3 className="mb-4 text-lg font-semibold">Top podgrupy kosztów</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-700 text-gray-400">
+                        <th className="p-2 text-left">Podgrupa</th>
+                        <th className="p-2 text-right">Kwota</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {expensesBySubgroup.length > 0 ? (
+                        expensesBySubgroup.map((item) => (
+                          <tr key={item.name} className="border-b border-gray-700/60">
+                            <td className="p-2">{item.name}</td>
+                            <td className="p-2 text-right font-mono">{formatCurrency(item.amount, 'PLN')}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={2} className="p-4 text-center text-gray-400">
+                            Brak danych o podgrupach.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+                <h3 className="mb-4 text-lg font-semibold">Miesięczny przepływ</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-700 text-gray-400">
+                        <th className="p-2 text-left">Miesiąc</th>
+                        <th className="p-2 text-right">Wpływy</th>
+                        <th className="p-2 text-right">Wydatki</th>
+                        <th className="p-2 text-right">Bilans</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {monthlyFlow.length > 0 ? (
+                        monthlyFlow.map((item) => (
+                          <tr key={item.month} className="border-b border-gray-700/60">
+                            <td className="p-2">{item.month}</td>
+                            <td className="p-2 text-right text-green-400">{formatCurrency(item.income, 'PLN')}</td>
+                            <td className="p-2 text-right text-red-400">{formatCurrency(item.expense, 'PLN')}</td>
+                            <td
+                              className={`p-2 text-right font-semibold ${
+                                item.net >= 0 ? 'text-green-400' : 'text-red-400'
+                              }`}
+                            >
+                              {formatCurrency(item.net, 'PLN')}
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={4} className="p-4 text-center text-gray-400">
+                            Brak danych miesięcznych w wybranym zakresie.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+                <h3 className="mb-4 text-lg font-semibold">Dzienny trend wydatków</h3>
+                <div className="space-y-2">
+                  {dailyExpenseTrend.length > 0 ? (
+                    dailyExpenseTrend.map((item) => (
+                      <div key={item.date} className="grid grid-cols-[120px_1fr_140px] items-center gap-3">
+                        <div className="text-sm text-gray-300">{item.date}</div>
+                        <AnalyticsBar
+                          value={item.amount}
+                          max={Math.max(...dailyExpenseTrend.map((d) => d.amount))}
+                          colorClass="bg-orange-500"
+                        />
+                        <div className="text-right font-mono text-sm">{formatCurrency(item.amount, 'PLN')}</div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-sm text-gray-400">Brak dziennych wydatków w wybranym zakresie.</div>
+                  )}
+                </div>
+              </section>
+            </div>
+	      )}
+		  
+          {viewMode === 'categories' ? (
+          <div className="space-y-6">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={openCreateGroupModal}
+                  className="rounded bg-blue-600 px-4 py-2 hover:bg-blue-500"
+                >
+                  Dodaj grupę
+                </button>
+              </div>
+
+              <label className="flex items-center gap-2 text-sm text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={showInactiveCategories}
+                  onChange={(e) => setShowInactiveCategories(e.target.checked)}
+                />
+                Pokaż nieaktywne
+              </label>
+            </div>
+			
+			<div className="space-y-4">
+			  {categoryGroups.map((group) => (
+			    <div key={group.id} className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+	              <div>
+				    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-lg font-semibold">{group.name}</h3>
+                        <span className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-300">
+                          {group.code}
+                        </span>
+                        <span className={`rounded px-2 py-1 text-xs ${group.isActive ? 'bg-green-900 text-green-300' : 'bg-gray-700 text-gray-300'}`}>
+                          {group.isActive ? 'Aktywna' : 'Nieaktywna'}
+                        </span>					  
+                        {group.isSystem && (
+                          <span className="rounded bg-purple-900 px-2 py-1 text-xs text-purple-300">
+                            Systemowa
+                          </span>
+                        )}
+					</div>
+                    <div className="mt-1 text-sm text-gray-400">Sortowanie: {group.sortOrder ?? 0}</div>					
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+				    <button
+                      type="button"
+                      onClick={() => openCreateSubgroupModal(group.id)}
+                      className="rounded border border-gray-600 px-3 py-2 hover:bg-gray-700"
+                      disabled={!group.isActive}
+                    >
+                      Dodaj podgrupę
+                    </button>
+					
+					{!group.isSystem && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => openEditGroupModal(group)}
+                          className="rounded border border-gray-600 px-3 py-2 hover:bg-gray-700"
+                        >
+                          Edytuj
+                        </button>
+                        {group.isActive && (
+                          <button
+                            type="button"
+                            onClick={() => deactivateGroup(group.id)}
+                            className="rounded border border-red-800 px-3 py-2 text-red-300 hover:bg-red-950"
+                          >
+                            Dezaktywuj
+                          </button>
+                        )}
+                      </>
+                    )}
+				  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-700 text-gray-400">
+                          <th className="p-2 text-left">Podgrupa</th>
+                          <th className="p-2 text-left">Kod</th>
+                          <th className="p-2 text-left">Sort.</th>
+                          <th className="p-2 text-left">Status</th>
+                          <th className="p-2 text-left">Typ</th>
+                          <th className="p-2 text-left">Akcje</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {group.subgroups.length > 0 ? (
+                          group.subgroups.map((subgroup) => (
+                            <tr key={subgroup.id} className="border-b border-gray-700/60">
+                              <td className="p-2">{subgroup.name}</td>
+                              <td className="p-2 text-gray-300">{subgroup.code}</td>
+                              <td className="p-2">{subgroup.sortOrder ?? 0}</td>
+                              <td className="p-2">{subgroup.isActive ? 'Aktywna' : 'Nieaktywna'}</td>
+                              <td className="p-2">{subgroup.isSystem ? 'Systemowa' : 'Użytkownika'}</td>
+                              <td className="p-2">
+                                <div className="flex flex-wrap gap-2">
+                                  {!subgroup.isSystem && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => openEditSubgroupModal(group.id, subgroup)}
+                                        className="rounded border border-gray-600 px-3 py-1 hover:bg-gray-700"
+                                      >
+                                        Edytuj
+                                      </button>
+                                      {subgroup.isActive && (
+                                        <button
+                                          type="button"
+                                          onClick={() => deactivateSubgroup(subgroup.id)}
+                                          className="rounded border border-red-800 px-3 py-1 text-red-300 hover:bg-red-950"
+                                        >
+                                          Dezaktywuj
+                                        </button>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={6} className="p-3 text-center text-gray-400">
+                              Brak podgrup w tej grupie.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>		   
+				</div>
+			  ))}
+
+              {categoryGroups.length === 0 && (
+                <div className="rounded-lg border border-gray-700 bg-gray-800 p-4 text-gray-400">
+                  Brak kategorii do wyświetlenia.
+                </div>
+              )}
+
+			</div>
+		</div>
+        ) : viewMode === 'users' ? (
+          <section className="space-y-4 rounded-lg border border-gray-700 bg-gray-800 p-4">
+            <div className="flex items-center justify-between"><div><h2 className="text-lg font-semibold">Użytkownicy</h2><p className="text-sm text-gray-400">Administrator nie ma dostępu do danych finansowych innych użytkowników.</p></div><button type="button" onClick={createManagedUser} className="rounded bg-blue-600 px-3 py-2 hover:bg-blue-500">Dodaj użytkownika</button></div>
+            <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="border-b border-gray-700 text-gray-400"><tr><th className="p-2">Nazwa</th><th className="p-2">Rola</th><th className="p-2">Status</th><th className="p-2">Akcje</th></tr></thead><tbody>{managedUsers.map((user) => <tr key={user.id} className="border-b border-gray-700/60"><td className="p-2">{user.username}</td><td className="p-2">{user.role === 'ADMIN' ? 'Administrator' : 'Użytkownik'}</td><td className="p-2">{user.isActive ? 'Aktywny' : 'Zablokowany'}</td><td className="flex flex-wrap gap-2 p-2"><button type="button" onClick={() => updateManagedUser(user.id, { isActive: !user.isActive })} className="rounded border border-gray-600 px-2 py-1">{user.isActive ? 'Zablokuj' : 'Odblokuj'}</button><button type="button" onClick={() => { const password = window.prompt(`Nowe hasło dla ${user.username}:`); if (password) updateManagedUser(user.id, { password }); }} className="rounded border border-gray-600 px-2 py-1">Ustaw hasło</button></td></tr>)}</tbody></table></div>
+          </section>
+        ) : (
+        <>
+        {viewMode === 'transactions' && (
+          <div className="space-y-3 md:hidden">
+            {tableOperationRows.length > 0 ? (
+              tableOperationRows.map(({ row, transferRows }) => {
+                const transferOut = transferRows?.find((item) => item.transferSide === 'out');
+                const transferIn = transferRows?.find((item) => item.transferSide === 'in');
+                const isTransfer = Boolean(transferRows);
+
+                return (
+                  <article
+                    key={transferRows ? `mobile-transfer-${row.transactionId}` : `mobile-${row.rowId}`}
+                    onClick={() => startEditRow(row)}
+                    className="cursor-pointer rounded-lg border border-gray-700 bg-gray-800 p-4 active:bg-gray-700/70"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-xs text-gray-400">{formatDisplayDate(row.date)}</div>
+                        <div className="mt-1 break-words text-lg leading-snug">{getOperationDisplayInfo(row)}</div>
+                        <div className="mt-1 text-sm text-blue-300">
+                          {isTransfer ? 'Przelew' : row.accountName}
+                          {row.isRecurringGenerated && !isTransfer ? ' · cyklicznie' : ''}
+                          {row.isSalaryIncome ? ' · wypłata' : ''}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <IconButton title="Edytuj" colorClass="text-blue-400" onClick={(e) => { e.stopPropagation(); startEditRow(row); }}><EditIcon /></IconButton>
+                        <IconButton title="Usuń" colorClass="text-red-400" onClick={(e) => { e.stopPropagation(); handleDeleteTransaction(row.transactionId); }}><DeleteIcon /></IconButton>
+                      </div>
+                    </div>
+
+                    {isTransfer ? (
+                      <div className="mt-3 space-y-1 border-t border-gray-700 pt-3 text-sm">
+                        {transferOut && <div className="flex justify-between gap-3 text-red-300"><span>− {transferOut.accountName}</span><span className="font-mono">{formatCurrency(transferOut.expense, 'PLN')}</span></div>}
+                        {transferIn && <div className="flex justify-between gap-3 text-green-300"><span>+ {transferIn.accountName}</span><span className="font-mono">{formatCurrency(transferIn.income, 'PLN')}</span></div>}
+                      </div>
+                    ) : (
+                      <div className="mt-3 flex items-end justify-between gap-3 border-t border-gray-700 pt-3">
+                        <div className="text-sm text-gray-400">Saldo konta: {row.accountBalanceAfter !== null ? formatCurrency(row.accountBalanceAfter, 'PLN') : '—'}</div>
+                        <div className={`shrink-0 font-mono text-lg ${row.income ? 'text-green-400' : 'text-red-400'}`}>
+                          {row.income ? `+ ${formatCurrency(row.income, 'PLN')}` : `− ${formatCurrency(row.expense, 'PLN')}`}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="mt-3 flex items-center justify-between border-t border-gray-700 pt-3 text-xs text-gray-400">
+                      <span>Saldo całkowite: {formatCurrency(row.totalBalanceAfter, 'PLN')}</span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleCleared(row.transactionId); }}
+                        className={`rounded px-2 py-1 ${row.isCleared ? 'bg-green-700 text-green-100' : 'bg-gray-700 text-gray-300'}`}
+                        type="button"
+                      >
+                        {row.isCleared ? 'Rozliczona' : 'Nierozliczona'}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })
+            ) : (
+              <div className="rounded-lg border border-gray-700 bg-gray-800 p-4 text-center text-gray-400">Brak operacji w widocznym zakresie dat.</div>
+            )}
+          </div>
+        )}
+        <div className={`${viewMode === 'transactions' ? 'hidden md:block ' : ''}overflow-x-auto rounded-lg border border-gray-700 bg-gray-800`}>
+          <table className="w-full text-center">
+            <thead className="border-b border-gray-700">
+              <tr>
+                {viewMode === 'transactions' ? (
+                  <>
+                    <th className="p-4 text-left text-gray-400 align-top relative">
+                      <button
+                        type="button"
+                        data-filter-button
+                        className="inline-flex items-center gap-1 rounded border border-gray-700 bg-gray-800 px-3 py-1 text-sm text-gray-100 hover:bg-gray-700"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenFilterMenu((prev) => (prev === 'date' ? null : 'date'));
+                        }}
+                      >
+                        Data
+                        <span className="text-gray-400">▾</span>
+                      </button>
+                      {openFilterMenu === 'date' && (
+                        <div data-filter-menu className="absolute left-0 top-full z-30 mt-2 w-72 rounded border border-gray-700 bg-gray-900 p-3 shadow-lg">
+                          <div className="mb-2 flex items-center justify-between text-sm text-gray-200">
+                            <span>Filtruj Data</span>
+                            <button
+                              type="button"
+                              className="text-blue-400 hover:text-blue-300"
+                              onClick={() =>
+                                setTransactionFilters((prev) => ({
+                                  ...prev,
+                                  date: [],
+                                }))
+                              }
+                            >
+                              Wyczyść
+                            </button>
+                          </div>
+                          <div className="max-h-64 space-y-2 overflow-y-auto">
+                            <label className="flex items-center gap-2 text-sm text-gray-100">
+                              <input
+                                type="checkbox"
+                                checked={transactionFilters.date.length === dateFilterOptions.length}
+                                onChange={(e) =>
+                                  setTransactionFilters((prev) => ({
+                                    ...prev,
+                                    date: e.target.checked ? [...dateFilterOptions] : [],
+                                  }))
+                                }
+                              />
+                              Wszystkie
+                            </label>
+                            {dateFilterOptions.map((value) => (
+                              <label key={value} className="flex items-center gap-2 text-sm text-gray-100">
+                                <input
+                                  type="checkbox"
+                                  checked={transactionFilters.date.includes(value)}
+                                  onChange={() =>
+                                    setTransactionFilters((prev) => {
+                                      const values = prev.date.includes(value)
+                                        ? prev.date.filter((item) => item !== value)
+                                        : [...prev.date, value];
+                                      return { ...prev, date: values };
+                                    })
+                                  }
+                                />
+                                <span>{value}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </th>
+                    <th className="p-4 text-left text-gray-400 align-top relative">
+                      <button
+                        type="button"
+                        data-filter-button
+                        className="inline-flex items-center gap-1 rounded border border-gray-700 bg-gray-800 px-3 py-1 text-sm text-gray-100 hover:bg-gray-700"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenFilterMenu((prev) => (prev === 'account' ? null : 'account'));
+                        }}
+                      >
+                        Konto
+                        <span className="text-gray-400">▾</span>
+                      </button>
+                      {openFilterMenu === 'account' && (
+                        <div data-filter-menu className="absolute left-0 top-full z-30 mt-2 w-72 rounded border border-gray-700 bg-gray-900 p-3 shadow-lg">
+                          <div className="mb-2 flex items-center justify-between text-sm text-gray-200">
+                            <span>Filtruj Konto</span>
+                            <button
+                              type="button"
+                              className="text-blue-400 hover:text-blue-300"
+                              onClick={() =>
+                                setTransactionFilters((prev) => ({
+                                  ...prev,
+                                  account: [],
+                                }))
+                              }
+                            >
+                              Wyczyść
+                            </button>
+                          </div>
+                          <div className="max-h-64 space-y-2 overflow-y-auto">
+                            <label className="flex items-center gap-2 text-sm text-gray-100">
+                              <input
+                                type="checkbox"
+                                checked={transactionFilters.account.length === accountFilterOptions.length}
+                                onChange={(e) =>
+                                  setTransactionFilters((prev) => ({
+                                    ...prev,
+                                    account: e.target.checked ? [...accountFilterOptions] : [],
+                                  }))
+                                }
+                              />
+                              Wszystkie
+                            </label>
+                            {accountFilterOptions.map((value) => (
+                              <label key={value} className="flex items-center gap-2 text-sm text-gray-100">
+                                <input
+                                  type="checkbox"
+                                  checked={transactionFilters.account.includes(value)}
+                                  onChange={() =>
+                                    setTransactionFilters((prev) => {
+                                      const values = prev.account.includes(value)
+                                        ? prev.account.filter((item) => item !== value)
+                                        : [...prev.account, value];
+                                      return { ...prev, account: values };
+                                    })
+                                  }
+                                />
+                                <span>{value}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </th>
+                    <th className="p-4 text-left text-gray-400 align-top relative">
+                      <button
+                        type="button"
+                        data-filter-button
+                        className="inline-flex items-center gap-1 rounded border border-gray-700 bg-gray-800 px-3 py-1 text-sm text-gray-100 hover:bg-gray-700"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenFilterMenu((prev) => (prev === 'info' ? null : 'info'));
+                        }}
+                      >
+                        Info
+                        <span className="text-gray-400">▾</span>
+                      </button>
+                      {openFilterMenu === 'info' && (
+                        <div data-filter-menu className="absolute left-0 top-full z-30 mt-2 w-80 rounded border border-gray-700 bg-gray-900 p-3 shadow-lg">
+                          <div className="mb-2 flex items-center justify-between text-sm text-gray-200">
+                            <span>Filtruj Info</span>
+                            <button
+                              type="button"
+                              className="text-blue-400 hover:text-blue-300"
+                              onClick={() =>
+                                setTransactionFilters((prev) => ({
+                                  ...prev,
+                                  info: [],
+                                }))
+                              }
+                            >
+                              Wyczyść
+                            </button>
+                          </div>
+                          <div className="max-h-64 space-y-2 overflow-y-auto">
+                            <label className="flex items-center gap-2 text-sm text-gray-100">
+                              <input
+                                type="checkbox"
+                                checked={transactionFilters.info.length === infoFilterOptions.length}
+                                onChange={(e) =>
+                                  setTransactionFilters((prev) => ({
+                                    ...prev,
+                                    info: e.target.checked ? [...infoFilterOptions] : [],
+                                  }))
+                                }
+                              />
+                              Wszystkie
+                            </label>
+                            {infoFilterOptions.map((value) => (
+                              <label key={value} className="flex items-center gap-2 text-sm text-gray-100">
+                                <input
+                                  type="checkbox"
+                                  checked={transactionFilters.info.includes(value)}
+                                  onChange={() =>
+                                    setTransactionFilters((prev) => {
+                                      const values = prev.info.includes(value)
+                                        ? prev.info.filter((item) => item !== value)
+                                        : [...prev.info, value];
+                                      return { ...prev, info: values };
+                                    })
+                                  }
+                                />
+                                <span>{value}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </th>
+                    <th className="p-4 text-gray-400">Wpłata</th>
+                    <th className="p-4 text-gray-400">Wypłata</th>
+                    <th className="p-4 text-gray-400">Saldo konta</th>
+                    <th className="p-4 text-gray-400">Saldo całkowite</th>
+                    <th className="p-4 text-left text-gray-400 align-top relative">
+                      <button
+                        type="button"
+                        data-filter-button
+                        className="inline-flex items-center gap-1 rounded border border-gray-700 bg-gray-800 px-3 py-1 text-sm text-gray-100 hover:bg-gray-700"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenFilterMenu((prev) => (prev === 'cleared' ? null : 'cleared'));
+                        }}
+                      >
+                        Rozl.
+                        <span className="text-gray-400">▾</span>
+                      </button>
+                      {openFilterMenu === 'cleared' && (
+                        <div data-filter-menu className="absolute left-0 top-full z-30 mt-2 w-60 rounded border border-gray-700 bg-gray-900 p-3 shadow-lg">
+                          <div className="mb-2 flex items-center justify-between text-sm text-gray-200">
+                            <span>Filtruj Rozl.</span>
+                            <button
+                              type="button"
+                              className="text-blue-400 hover:text-blue-300"
+                              onClick={() =>
+                                setTransactionFilters((prev) => ({
+                                  ...prev,
+                                  cleared: '',
+                                }))
+                              }
+                            >
+                              Wyczyść
+                            </button>
+                          </div>
+                          <div className="space-y-2">
+                            <label className="flex items-center gap-2 text-sm text-gray-100">
+                              <input
+                                type="radio"
+                                name="cleared-filter"
+                                value=""
+                                checked={transactionFilters.cleared === ''}
+                                onChange={() =>
+                                  setTransactionFilters((prev) => ({
+                                    ...prev,
+                                    cleared: '',
+                                  }))
+                                }
+                              />
+                              Wszystkie
+                            </label>
+                            <label className="flex items-center gap-2 text-sm text-gray-100">
+                              <input
+                                type="radio"
+                                name="cleared-filter"
+                                value="ok"
+                                checked={transactionFilters.cleared === 'ok'}
+                                onChange={() =>
+                                  setTransactionFilters((prev) => ({
+                                    ...prev,
+                                    cleared: 'ok',
+                                  }))
+                                }
+                              />
+                              OK
+                            </label>
+                            <label className="flex items-center gap-2 text-sm text-gray-100">
+                              <input
+                                type="radio"
+                                name="cleared-filter"
+                                value="nie"
+                                checked={transactionFilters.cleared === 'nie'}
+                                onChange={() =>
+                                  setTransactionFilters((prev) => ({
+                                    ...prev,
+                                    cleared: 'nie',
+                                  }))
+                                }
+                              />
+                              Nie
+                            </label>
+                          </div>
+                        </div>
+                      )}
+                    </th>
+                    <th className="p-4 text-gray-400">Akcje</th>
+                  </>
+                ) : viewMode === 'recurring' ? (
+                  <>
+                    <th className="p-4 text-gray-400">Info</th>
+                    <th className="p-4 text-gray-400">Konto</th>
+                    <th className="p-4 text-gray-400">Kwota</th>
+                    <th className="p-4 text-gray-400">Start</th>
+                    <th className="p-4 text-gray-400">Koniec</th>
+                    <th className="p-4 text-gray-400">Częstotliwość</th>
+                    <th className="p-4 text-gray-400">Akcje</th>
+                  </>
+                ) : viewMode === 'accounts' ? (
+                  <>
+                    <th className="p-4 align-middle text-gray-400">Nazwa</th>
+                    <th className="p-4 align-middle text-gray-400">Typ</th>
+                    <th className="p-4 align-middle text-gray-400">Saldo początkowe</th>
+                    <th className="p-4 align-middle text-gray-400">Limit</th>
+                    <th className="p-4 align-middle text-gray-400">Konto spłaty</th>
+                    <th className="p-4 align-middle text-gray-400">Auto-spłata</th>
+                    <th className="p-4 align-middle text-gray-400">W budżecie</th>
+                    <th className="p-4 text-center text-gray-400">Akcje</th>
+                  </>
+                ) : null}
+              </tr>
+            </thead>
+
+            <tbody>
+              {viewMode === 'transactions' ? (
+                tableOperationRows.length > 0 ? (
+                  tableOperationRows.map(({ row, transferRows }) => {
+                    const transferOut = transferRows?.find((item) => item.transferSide === 'out');
+                    const transferIn = transferRows?.find((item) => item.transferSide === 'in');
+
+                    return (
+                    <tr
+                      key={transferRows ? `transfer-${row.transactionId}` : row.rowId}
+                      className="cursor-pointer border-b border-gray-700 hover:bg-gray-700/40"
+                      onClick={() => startEditRow(row)}
+                    >
+                      <td className="p-4 align-middle">{row.date}</td>
+                      <td className="p-4 align-middle">
+                        {transferRows ? (
+                          <div className="space-y-0 text-left text-xs leading-3">
+                            {transferOut && (
+                              <div className="flex items-center gap-1 whitespace-nowrap text-red-300">
+                                <span className="text-xs">−</span>
+                                <span>{transferOut.accountName}</span>
+                              </div>
+                            )}
+                            {transferIn && (
+                              <div className="flex items-center gap-1 whitespace-nowrap text-green-300">
+                                <span className="text-xs">+</span>
+                                <span>{transferIn.accountName}</span>
+                              </div>
+                            )}
+                          </div>
+                        ) : row.accountName}
+                      </td>
+                      <td className="p-4 align-middle">
+                        <div className="flex flex-col items-center justify-center">
+                          <span>
+                            {getOperationDisplayInfo(row)}
+                            {transferRows && <span className="ml-1 text-xs text-blue-300">· przelew</span>}
+                          </span>
+                          {row.isRecurringGenerated && !transferRows && (
+                            <span className="text-xs text-purple-300">wygenerowane cyklicznie</span>
+                          )}
+                          {row.isSalaryIncome && (
+                            <span className="text-xs text-emerald-300">wypłata</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="p-4 align-middle text-green-400">
+                        {transferRows
+                          ? transferIn?.income ? formatCurrency(transferIn.income, 'PLN') : ''
+                          : row.income ? formatCurrency(row.income, 'PLN') : ''}
+                      </td>
+                      <td className="p-4 align-middle text-red-400">
+                        {transferRows
+                          ? transferOut?.expense ? formatCurrency(transferOut.expense, 'PLN') : ''
+                          : row.expense ? formatCurrency(row.expense, 'PLN') : ''}
+                      </td>
+                      <td className="p-4 align-middle font-mono">
+                        {transferRows ? (
+                          <div className="space-y-0 whitespace-nowrap text-right text-xs leading-3">
+                            {transferOut && (
+                              <div className="text-red-200">
+                                {transferOut.accountBalanceAfter !== null
+                                  ? formatCurrency(transferOut.accountBalanceAfter, 'PLN')
+                                  : ''}
+                              </div>
+                            )}
+                            {transferIn && (
+                              <div className="text-green-200">
+                                {transferIn.accountBalanceAfter !== null
+                                  ? formatCurrency(transferIn.accountBalanceAfter, 'PLN')
+                                  : ''}
+                              </div>
+                            )}
+                          </div>
+                        ) : row.accountBalanceAfter !== null ? formatCurrency(row.accountBalanceAfter, 'PLN') : ''}
+                      </td>
+                      <td className="p-4 align-middle font-mono">
+                        {formatCurrency(row.totalBalanceAfter, 'PLN')}
+                      </td>
+                      <td className="p-4 align-middle">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleCleared(row.transactionId);
+                          }}
+                          className={`rounded px-2 py-1 text-xs ${
+                            row.isCleared
+                              ? 'bg-green-700 text-green-100'
+                              : 'bg-gray-700 text-gray-300'
+                          }`}
+                          type="button"
+                        >
+                          {row.isCleared ? 'OK' : 'Nie'}
+                        </button>
+                      </td>
+                      <td className="p-4 align-middle">
+                        <div className="flex justify-center gap-2">
+                          <IconButton
+                            title="Edytuj"
+                            colorClass="text-blue-400"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startEditRow(row);
+                            }}
+                          >
+                            <EditIcon />
+                          </IconButton>
+                          <IconButton
+                            title="Usuń"
+                            colorClass="text-red-400"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteTransaction(row.transactionId);
+                            }}
+                          >
+                            <DeleteIcon />
+                          </IconButton>
+                        </div>
+                      </td>
+                    </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={10} className="p-4 text-center text-gray-400">
+                      Brak operacji w widocznym zakresie dat.
+                    </td>
+                  </tr>
+                )
+              ) : viewMode === 'recurring' ? (
+                templates.length > 0 ? (
+                  templates.map((t) => (
+                    <tr
+                      key={t.id}
+                      className="cursor-pointer border-b border-gray-700 hover:bg-gray-700"
+                      onClick={() => startEditTemplate(t)}
+                    >
+                      <td className="p-4 align-middle">{t.info}</td>
+                      <td className="p-4 align-middle">
+                        {accounts.find((a) => a.id === t.accountId)?.name ?? ''}
+                      </td>
+                      <td className="p-4 align-middle">{formatCurrency(t.amount, 'PLN')}</td>
+                      <td className="p-4 align-middle">{String(t.startDate).split('T')[0]}</td>
+                      <td className="p-4 align-middle">
+                        {t.endDate ? String(t.endDate).split('T')[0] : ''}
+                      </td>
+                      <td className="p-4 align-middle">
+                        co {t.multiplier} {t.period}
+                        {t.dayOfMonth ? `, dzień ${t.dayOfMonth}` : ''}
+                      </td>
+                      <td className="p-4 align-middle">
+                        <div className="flex justify-center gap-2">
+                          <IconButton
+                            title="Edytuj"
+                            colorClass="text-blue-400"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startEditTemplate(t);
+                            }}
+                          >
+                            <EditIcon />
+                          </IconButton>
+                          <IconButton
+                            title="Usuń"
+                            colorClass="text-red-400"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteTemplate(t.id);
+                            }}
+                          >
+                            <DeleteIcon />
+                          </IconButton>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={7} className="p-4 text-center text-gray-400">
+                      Brak szablonów cyklicznych.
+                    </td>
+                  </tr>
+                )
+              ) : (
+                accounts.length > 0 ? (
+                  accounts.map((account) => (
+                    <tr
+                      key={account.id}
+                      className="cursor-pointer border-b border-gray-700 hover:bg-gray-700"
+                      onClick={() => startEditAccount(account)}
+                    >
+                      <td className="p-4 align-middle">{account.name}</td>
+                      <td className="p-4 align-middle">
+                        {account.accountType?.name ?? `Typ ${account.accountTypeId}`}
+                      </td>
+                      <td className="p-4 align-middle">
+                        {formatCurrency(account.initialBalance, 'PLN')}
+                      </td>
+                      <td className="p-4 align-middle">
+                        {account.creditLimit != null ? formatCurrency(account.creditLimit, 'PLN') : ''}
+                      </td>
+                      <td className="p-4 align-middle">
+                        {account.repaymentAccount?.name ?? ''}
+                      </td>
+                      <td className="p-4 align-middle">
+                        {account.autoRepaymentEnabled
+                          ? `Tak, dzień ${Number(account.autoRepaymentOffsetDays ?? 1) + 1}`
+                          : 'Nie'}
+                      </td>
+                      <td className="p-4 align-middle">
+                        {account.includeInDailyBudget ? 'Tak' : 'Nie'}
+                      </td>
+                      <td className="p-4 align-middle">
+                        <div className="flex justify-center gap-2">
+                          <IconButton
+                            title="Edytuj"
+                            colorClass="text-blue-400"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startEditAccount(account);
+                            }}
+                          >
+                            <EditIcon />
+                          </IconButton>
+                          <IconButton
+                            title="Usuń"
+                            colorClass="text-red-400"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteAccount(account.id);
+                            }}
+                          >
+                            <DeleteIcon />
+                          </IconButton>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={8} className="p-4 text-center text-gray-400">
+                      Brak kont.
+                    </td>
+                  </tr>
+                )
+              )}
+            </tbody>
+          </table>
+        </div>
+        </>
+        )}
+      </div>
+		
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-2xl rounded-xl border border-gray-700 bg-gray-900 p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold">
+                {activeTab === 'transaction' && (editingTransactionId ? 'Edytuj transakcję' : 'Dodaj operację')}
+                {activeTab === 'transfer' && (editingTransactionId ? 'Edytuj przelew' : 'Dodaj przelew')}
+                {activeTab === 'recurring' && (editingTemplateId ? 'Edytuj szablon cykliczny' : 'Dodaj cykliczne')}
+                {activeTab === 'account' && (editingAccountId ? 'Edytuj konto' : 'Dodaj konto')}
+              </h2>
+              <button onClick={closeModal} className="text-gray-400 hover:text-white" type="button">
+                Zamknij
+              </button>
+            </div>
+
+            <div className="mb-4 flex flex-wrap gap-2">
+              <button
+                className={`rounded px-3 py-2 ${
+                  activeTab === 'transaction' ? 'bg-blue-600' : 'border border-gray-700 bg-gray-800'
+                }`}
+                onClick={() => setActiveTab('transaction')}
+                type="button"
+              >
+                Operacja
+              </button>
+              <button
+                className={`rounded px-3 py-2 ${
+                  activeTab === 'transfer' ? 'bg-blue-600' : 'border border-gray-700 bg-gray-800'
+                }`}
+                onClick={() => setActiveTab('transfer')}
+                type="button"
+              >
+                Przelew
+              </button>
+              <button
+                className={`rounded px-3 py-2 ${
+                  activeTab === 'recurring' ? 'bg-blue-600' : 'border border-gray-700 bg-gray-800'
+                }`}
+                onClick={() => setActiveTab('recurring')}
+                type="button"
+              >
+                Cykliczne
+              </button>
+              <button
+                className={`rounded px-3 py-2 ${
+                  activeTab === 'account' ? 'bg-blue-600' : 'border border-gray-700 bg-gray-800'
+                }`}
+                onClick={() => setActiveTab('account')}
+                type="button"
+              >
+                Konto
+              </button>
+            </div>
+
+            <form className="space-y-4" onSubmit={handleSubmit}>
+              {activeTab === 'transaction' && (
+                <>
+                  <input
+                    type="date"
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.date}
+                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                  />
+                  <select
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.accountId}
+                    onChange={(e) => setFormData({ ...formData, accountId: e.target.value })}
+                  >
+                    <option value="">Wybierz konto</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    placeholder="Opis"
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.info}
+                    onChange={handleInfoChange}
+                    onKeyDown={handleInfoKeyDown}
+                  />
+                  {infoSuggestion && (
+                    <div className="text-sm text-gray-400">
+                      Podpowiedź: <button type="button" onClick={acceptInfoSuggestion} className="underline">{infoSuggestion}</button>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-200">Grupa</label>
+                      <select
+                        className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                        value={formData.transactionGroupId}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            transactionGroupId: e.target.value,
+                            transactionSubgroupId: '',
+                          }))
+                        }
+                      >
+                        <option value="">Bez grupy</option>
+                        {transactionGroups
+                          .filter((group) => group.isActive)
+                          .map((group) => (
+                            <option key={group.id} value={group.id}>
+                              {group.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-200">Podgrupa</label>
+                      <select
+                        className="w-full rounded border border-gray-700 bg-gray-800 p-2 disabled:cursor-not-allowed disabled:opacity-50"
+                        value={formData.transactionSubgroupId}
+                        disabled={!formData.transactionGroupId}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            transactionSubgroupId: e.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">
+                          {formData.transactionGroupId ? 'Bez podgrupy' : 'Najpierw wybierz grupę'}
+                        </option>
+                        {availableTransactionSubgroups
+                          .filter((subgroup) => subgroup.isActive)
+                          .map((subgroup) => (
+                            <option key={subgroup.id} value={subgroup.id}>
+                              {subgroup.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <input
+                      type="number"
+                      step="0.01"
+                      placeholder="Kwota wpłata"
+                      className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                      value={formData.income}
+                      onChange={(e) => setFormData({ ...formData, income: e.target.value })}
+                    />
+                    <input
+                      type="number"
+                      step="0.01"
+                      placeholder="Kwota wypłata"
+                      className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                      value={formData.expense}
+                      onChange={(e) => setFormData({ ...formData, expense: e.target.value })}
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={formData.isSalaryIncome}
+                      onChange={(e) => setFormData({ ...formData, isSalaryIncome: e.target.checked })}
+                    />
+                    To wpływ wynagrodzenia
+                  </label>
+                </>
+              )}
+
+              {activeTab === 'transfer' && (
+                <>
+                  <input
+                    type="date"
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.date}
+                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                  />
+                  <select
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.sourceAccountId}
+                    onChange={(e) => setFormData({ ...formData, sourceAccountId: e.target.value })}
+                  >
+                    <option value="">Z konta</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.destinationAccountId}
+                    onChange={(e) => setFormData({ ...formData, destinationAccountId: e.target.value })}
+                  >
+                    <option value="">Na konto</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    placeholder="Opis"
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.info}
+                    onChange={handleInfoChange}
+                    onKeyDown={handleInfoKeyDown}
+                  />
+                  {infoSuggestion && (
+                    <div className="text-sm text-gray-400">
+                      Podpowiedź: <button type="button" onClick={acceptInfoSuggestion} className="underline">{infoSuggestion}</button>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-200">Grupa</label>
+                      <select
+                        className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                        value={formData.transactionGroupId}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            transactionGroupId: e.target.value,
+                            transactionSubgroupId: '',
+                          }))
+                        }
+                      >
+                        <option value="">Bez grupy</option>
+                        {transactionGroups
+                          .filter((group) => group.isActive)
+                          .map((group) => (
+                            <option key={group.id} value={group.id}>
+                              {group.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-200">Podgrupa</label>
+                      <select
+                        className="w-full rounded border border-gray-700 bg-gray-800 p-2 disabled:cursor-not-allowed disabled:opacity-50"
+                        value={formData.transactionSubgroupId}
+                        disabled={!formData.transactionGroupId}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            transactionSubgroupId: e.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">
+                          {formData.transactionGroupId ? 'Bez podgrupy' : 'Najpierw wybierz grupę'}
+                        </option>
+                        {availableTransactionSubgroups
+                          .filter((subgroup) => subgroup.isActive)
+                          .map((subgroup) => (
+                            <option key={subgroup.id} value={subgroup.id}>
+                              {subgroup.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  </div>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="Kwota"
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.amount}
+                    onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                  />
+                </>
+              )}
+
+              {activeTab === 'recurring' && (
+                <>
+                  <select
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.accountId}
+                    onChange={(e) => setFormData({ ...formData, accountId: e.target.value })}
+                  >
+                    <option value="">Konto</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    placeholder="Opis szablonu"
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.info}
+                    onChange={handleInfoChange}
+                    onKeyDown={handleInfoKeyDown}
+                  />
+                  {infoSuggestion && (
+                    <div className="text-sm text-gray-400">
+                      Podpowiedź: <button type="button" onClick={acceptInfoSuggestion} className="underline">{infoSuggestion}</button>
+                    </div>
+                  )}
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="Kwota"
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.amount}
+                    onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                  />
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-200">Grupa</label>
+                      <select
+                        className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                        value={formData.transactionGroupId}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            transactionGroupId: e.target.value,
+                            transactionSubgroupId: '',
+                          }))
+                        }
+                      >
+                        <option value="">Bez grupy</option>
+                        {transactionGroups
+                          .filter((group) => group.isActive)
+                          .map((group) => (
+                            <option key={group.id} value={group.id}>
+                              {group.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-200">Podgrupa</label>
+                      <select
+                        className="w-full rounded border border-gray-700 bg-gray-800 p-2 disabled:cursor-not-allowed disabled:opacity-50"
+                        value={formData.transactionSubgroupId}
+                        disabled={!formData.transactionGroupId}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            transactionSubgroupId: e.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">
+                          {formData.transactionGroupId ? 'Bez podgrupy' : 'Najpierw wybierz grupę'}
+                        </option>
+                        {availableTransactionSubgroups
+                          .filter((subgroup) => subgroup.isActive)
+                          .map((subgroup) => (
+                            <option key={subgroup.id} value={subgroup.id}>
+                              {subgroup.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="date"
+                      className="w-1/2 rounded border border-gray-700 bg-gray-800 p-2"
+                      value={formData.startDate}
+                      onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                    />
+                    <input
+                      type="date"
+                      className="w-1/2 rounded border border-gray-700 bg-gray-800 p-2"
+                      value={formData.endDate}
+                      onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      className="w-1/3 rounded border border-gray-700 bg-gray-800 p-2"
+                      placeholder="Co ile"
+                      value={formData.frequencyMultiplier}
+                      onChange={(e) => setFormData({ ...formData, frequencyMultiplier: e.target.value })}
+                    />
+                    <select
+                      className="w-2/3 rounded border border-gray-700 bg-gray-800 p-2"
+                      value={formData.frequencyPeriod}
+                      onChange={(e) =>
+                        setFormData({ ...formData, frequencyPeriod: e.target.value as 'day' | 'month' | 'year' })
+                      }
+                    >
+                      <option value="day">Dni</option>
+                      <option value="month">Miesięcy</option>
+                      <option value="year">Lat</option>
+                    </select>
+                  </div>
+                  {formData.frequencyPeriod === 'month' && (
+                    <input
+                      type="number"
+                      min="1"
+                      max="31"
+                      placeholder="Dzień miesiąca"
+                      className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                      value={formData.dayOfMonth}
+                      onChange={(e) => setFormData({ ...formData, dayOfMonth: e.target.value })}
+                    />
+                  )}
+                </>
+              )}
+
+              {activeTab === 'account' && (
+                <>
+                  <input
+                    type="text"
+                    placeholder="Nazwa konta"
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.accountName}
+                    onChange={(e) => setFormData({ ...formData, accountName: e.target.value })}
+                  />
+                  <select
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.accountTypeId}
+                    onChange={(e) =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        accountTypeId: e.target.value,
+                        creditLimit: '',
+                        repaymentAccountId: '',
+                        autoRepaymentEnabled: false,
+                        autoRepaymentOffsetDays: '1',
+                        autoRepaymentGroupId: '',
+                        autoRepaymentSubgroupId: '',
+                      }))
+                    }
+                  >
+                    <option value="">Wybierz typ konta</option>
+                    {accountTypeOptions.map((type) => (
+                      <option key={type.id} value={type.id}>
+                        {type.name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="Saldo początkowe"
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                    value={formData.initialBalance}
+                    onChange={(e) => setFormData({ ...formData, initialBalance: e.target.value })}
+                  />
+                  <label className="flex items-center gap-2 text-sm text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={formData.includeInDailyBudget}
+                      onChange={(e) => setFormData({ ...formData, includeInDailyBudget: e.target.checked })}
+                    />
+                    Uwzględniaj konto w budżecie dziennym
+                  </label>
+                  {isCreditCardForm && (
+                    <>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="Limit karty kredytowej"
+                        className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                        value={formData.creditLimit}
+                        onChange={(e) => setFormData({ ...formData, creditLimit: e.target.value })}
+                      />
+                      <select
+                        className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                        value={formData.repaymentAccountId}
+                        onChange={(e) => setFormData({ ...formData, repaymentAccountId: e.target.value })}
+                      >
+                        <option value="">Konto do spłaty karty (opcjonalnie)</option>
+                        {accounts
+                          .filter((a) => !editingAccountId || a.id !== editingAccountId)
+                          .map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.name}
+                            </option>
+                          ))}
+                      </select>
+
+
+                  <label className="flex items-center gap-2 text-sm text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={formData.autoRepaymentEnabled}
+                      onChange={(e) =>
+                        setFormData({ ...formData, autoRepaymentEnabled: e.target.checked })
+                      }
+                    />
+                    Automatyczna spłata
+                  </label>
+
+                  <input
+                    type="number"
+                    min="0"
+                    max="31"
+                    placeholder="Dzień spłaty"
+                    className="w-full rounded border border-gray-700 bg-gray-800 p-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    value={formData.autoRepaymentOffsetDays}
+                    disabled={!formData.autoRepaymentEnabled}
+                    onChange={(e) => setFormData({ ...formData, autoRepaymentOffsetDays: e.target.value })}
+                  />
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-200">
+                        Grupa spłaty
+                      </label>
+                      <select
+                        className="w-full rounded border border-gray-700 bg-gray-800 p-2 disabled:cursor-not-allowed disabled:opacity-50"
+                        value={formData.autoRepaymentGroupId}
+                        disabled={!formData.autoRepaymentEnabled}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            autoRepaymentGroupId: e.target.value,
+                            autoRepaymentSubgroupId: '',
+                          }))
+                        }
+                      >
+                        <option value="">Domyślna kategoria systemowa</option>
+                        {transactionGroups
+                          .filter((group) => group.isActive)
+                          .map((group) => (
+                            <option key={group.id} value={group.id}>
+                              {group.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-200">
+                        Podgrupa spłaty
+                      </label>
+                      <select
+                        className="w-full rounded border border-gray-700 bg-gray-800 p-2 disabled:cursor-not-allowed disabled:opacity-50"
+                        value={formData.autoRepaymentSubgroupId}
+                        disabled={!formData.autoRepaymentEnabled || !formData.autoRepaymentGroupId}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            autoRepaymentSubgroupId: e.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">
+                          {formData.autoRepaymentGroupId
+                            ? 'Bez podgrupy'
+                            : 'Najpierw wybierz grupę'}
+                        </option>
+                        {availableAutoRepaymentSubgroups
+                          .filter((subgroup) => subgroup.isActive)
+                          .map((subgroup) => (
+                            <option key={subgroup.id} value={subgroup.id}>
+                              {subgroup.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  </div>
+                    </>
+                  )}
+                </>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="rounded border border-gray-700 px-4 py-2 hover:bg-gray-800"
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="rounded bg-blue-600 px-4 py-2 hover:bg-blue-500 disabled:opacity-50"
+                >
+                  {isSubmitting ? 'Zapisywanie...' : 'Zapisz'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+	  
+      {isCategoryModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold">
+                {categoryFormMode === 'group'
+                  ? editingGroupId
+                    ? 'Edytuj grupę'
+                    : 'Dodaj grupę'
+                  : editingSubgroupId
+                    ? 'Edytuj podgrupę'
+                    : 'Dodaj podgrupę'}
+              </h2>
+              <button
+                type="button"
+                onClick={closeCategoryModal}
+                className="rounded border border-gray-600 px-3 py-1 hover:bg-gray-800"
+              >
+                Zamknij
+              </button>
+            </div>
+
+            <form className="space-y-4" onSubmit={handleCategorySubmit}>
+              {categoryFormMode === 'subgroup' && (
+                <select
+                  className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                  value={categoryForm.transactionGroupId}
+                  onChange={(e) =>
+                    setCategoryForm((prev) => ({
+                      ...prev,
+                      transactionGroupId: e.target.value,
+                    }))
+                  }
+                >
+                  <option value="">Wybierz grupę nadrzędną</option>
+                  {categoryGroups
+                    .filter((group) => group.isActive)
+                    .map((group) => (
+                      <option key={group.id} value={group.id}>
+                        {group.name}
+                      </option>
+                    ))}
+                </select>
+              )}
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-200">
+                  {categoryFormMode === 'group' ? 'Nazwa grupy' : 'Nazwa podgrupy'}
+                </label>
+                <input
+                  type="text"
+                  placeholder={categoryFormMode === 'group' ? 'Np. Dom' : 'Np. Prąd'}
+                  className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                  value={categoryForm.name}
+                  onChange={(e) => {
+                    const nextName = e.target.value;
+
+                    setCategoryForm((prev) => ({
+                      ...prev,
+                      name: nextName,
+                      code: isCategoryCodeDirty ? prev.code : slugifyCategoryCode(nextName),
+                    }));
+                  }}
+                />
+			  </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-200">
+                  Kod techniczny
+                </label>
+                <input
+                  type="text"
+                  placeholder={
+                    categoryFormMode === 'group'
+                      ? 'Uzupełni się automatycznie, np. dom'
+                      : 'Uzupełni się automatycznie, np. prad'
+                  }
+                  className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                  value={categoryForm.code}
+                  onChange={(e) => {
+                    const nextCode = slugifyCategoryCode(e.target.value);
+                    setIsCategoryCodeDirty(true);
+                    setCategoryForm((prev) => ({
+                      ...prev,
+                      code: nextCode,
+                    }));
+                  }}
+                />
+                <p className="text-xs text-gray-400">
+                  Kod jest używany technicznie w systemie. Możesz go zmienić ręcznie, ale domyślnie tworzy się z nazwy.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-200">
+                  Kolejność wyświetlania
+                </label>
+                <input
+                  type="number"
+                  placeholder="Np. 10, 20, 30"
+                  className="w-full rounded border border-gray-700 bg-gray-800 p-2"
+                  value={categoryForm.sortOrder}
+                  onChange={(e) =>
+                    setCategoryForm((prev) => ({
+                      ...prev,
+                      sortOrder: e.target.value,
+                    }))
+                  }
+                />
+                <p className="text-xs text-gray-400">
+                  Mniejsza wartość oznacza wyższą pozycję na liście. Dla porządku warto używać kroków co 10.
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeCategoryModal}
+                  className="rounded border border-gray-600 px-4 py-2 hover:bg-gray-800"
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="rounded bg-blue-600 px-4 py-2 hover:bg-blue-500 disabled:opacity-50"
+                >
+                  {isSubmitting ? 'Zapisywanie...' : 'Zapisz'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+	  
+	  
+	  
+	  
+	  
+    </div>
+  );
+}

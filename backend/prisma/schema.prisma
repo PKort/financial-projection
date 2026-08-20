@@ -1,0 +1,207 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model GlobalSettings {
+  id    Int    @id @default(autoincrement())
+  userId Int   @map("userid")
+  user User    @relation(fields: [userId], references: [id])
+  key   String
+  value String
+
+  @@map("globalsettings")
+  @@unique([userId, key])
+  @@index([userId])
+}
+
+model User {
+  id           Int       @id @default(autoincrement())
+  username     String    @unique
+  passwordHash String    @map("passwordhash")
+  role         String    @default("USER")
+  isActive     Boolean   @default(true) @map("isactive")
+  createdAt    DateTime  @default(now()) @map("createdat")
+  updatedAt    DateTime  @updatedAt @map("updatedat")
+  sessions     UserSession[]
+  settings     GlobalSettings[]
+  accounts     Account[]
+  groups       TransactionGroup[]
+  subgroups    TransactionSubgroup[]
+  transactions Transaction[]
+  templates    RecurringTemplate[]
+
+  @@map("users")
+}
+
+model UserSession {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("userid")
+  user      User     @relation(fields: [userId], references: [id])
+  tokenHash String   @unique @map("tokenhash")
+  expiresAt DateTime @map("expiresat")
+  createdAt DateTime @default(now()) @map("createdat")
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+model TransactionGroup {
+  id           Int                   @id @default(autoincrement())
+  userId       Int                   @map("userid")
+  user         User                  @relation(fields: [userId], references: [id])
+  code         String
+  name         String
+  sortOrder    Int                   @default(0) @map("sortorder")
+  isSystem     Boolean               @default(false) @map("issystem")
+  isActive     Boolean               @default(true) @map("isactive")
+  subgroups    TransactionSubgroup[]
+  transactions Transaction[]
+  recurringTemplates RecurringTemplate[]
+  autoRepaymentAccounts Account[] @relation("CreditCardRepaymentGroup")
+
+  @@map("transactiongroups")
+  @@unique([userId, code])
+  @@index([userId])
+}
+
+model TransactionSubgroup {
+  id                 Int                @id @default(autoincrement())
+  userId             Int                @map("userid")
+  user               User               @relation(fields: [userId], references: [id])
+  transactionGroupId Int                @map("transactiongroupid")
+  transactionGroup   TransactionGroup   @relation(fields: [transactionGroupId], references: [id])
+  code               String
+  name               String
+  sortOrder          Int                @default(0) @map("sortorder")
+  isSystem           Boolean            @default(false) @map("issystem")
+  isActive           Boolean            @default(true) @map("isactive")
+  transactions       Transaction[]
+  recurringTemplates RecurringTemplate[]
+  autoRepaymentAccounts Account[] @relation("CreditCardRepaymentSubgroup")
+
+  @@index([transactionGroupId], map: "transactionsubgroupstransactiongroupididx")
+  @@unique([userId, code])
+  @@index([userId])
+  @@map("transactionsubgroups")
+}
+
+model AccountType {
+  id       Int       @id @default(autoincrement())
+  code     String    @unique @map("key")
+  name     String    @map("label")
+  accounts Account[]
+
+  @@map("account_types")
+}
+
+model Account {
+  id                        Int                 @id @default(autoincrement())
+  name                      String
+  userId                    Int                 @map("userid")
+  user                      User                @relation(fields: [userId], references: [id])
+  accountTypeId             Int                 @map("accounttypeid")
+  accountType               AccountType         @relation(fields: [accountTypeId], references: [id])
+  initialBalance            Decimal             @map("initialbalance") @db.Decimal(10, 2)
+  includeInDailyBudget      Boolean             @default(true) @map("includeindailybudget")
+  creditLimit               Decimal?            @map("creditlimit") @db.Decimal(10, 2)
+  repaymentAccountId        Int?                @map("repaymentaccountid")
+  repaymentAccount          Account?            @relation("CreditCardRepaymentAccount", fields: [repaymentAccountId], references: [id])
+  creditCardsToRepay        Account[]           @relation("CreditCardRepaymentAccount")
+  autoRepaymentEnabled      Boolean             @default(false) @map("autorepaymentenabled")
+  autoRepaymentOffsetDays   Int                 @default(1) @map("autorepaymentoffsetdays")
+  autoRepaymentGroupId      Int?                @map("autorepaymentgroupid")
+  autoRepaymentGroup        TransactionGroup?  @relation("CreditCardRepaymentGroup", fields: [autoRepaymentGroupId], references: [id])
+  autoRepaymentSubgroupId   Int?                @map("autorepaymentsubgroupid")
+  autoRepaymentSubgroup     TransactionSubgroup? @relation("CreditCardRepaymentSubgroup", fields: [autoRepaymentSubgroupId], references: [id])
+  transactions              Transaction[]       @relation("AccountTransactions")
+  sourceTransfers           Transaction[]       @relation("SourceTransactions")
+  destTransfers             Transaction[]       @relation("DestinationTransactions")
+  autoGeneratedTransactions Transaction[]       @relation("AutoGeneratedSourceAccount")
+  templates                 RecurringTemplate[]
+
+  @@index([accountTypeId], map: "accountsaccounttypeididx")
+  @@index([userId])
+  @@index([repaymentAccountId], map: "accountsrepaymentaccountididx")
+  @@index([autoRepaymentGroupId], map: "accountsautorepaymentgroupididx")
+  @@index([autoRepaymentSubgroupId], map: "accountsautorepaymentsubgroupididx")
+  @@map("accounts")
+}
+
+model Transaction {
+  id                           Int                  @id @default(autoincrement())
+  date                         DateTime
+  info                         String
+  userId                       Int                  @map("userid")
+  user                         User                 @relation(fields: [userId], references: [id])
+  income                       Decimal?             @db.Decimal(10, 2)
+  expense                      Decimal?             @db.Decimal(10, 2)
+  type                         String               @default("transaction")
+  isCleared                    Boolean              @default(false)
+  isSalaryIncome               Boolean              @default(false) @map("issalaryincome")
+  transactionGroupId           Int?                 @map("transactiongroupid")
+  transactionGroup             TransactionGroup?    @relation(fields: [transactionGroupId], references: [id])
+  transactionSubgroupId        Int?                 @map("transactionsubgroupid")
+  transactionSubgroup          TransactionSubgroup? @relation(fields: [transactionSubgroupId], references: [id])
+  accountId                    Int?
+  account                      Account?             @relation("AccountTransactions", fields: [accountId], references: [id])
+  sourceAccountId              Int?
+  sourceAccount                Account?             @relation("SourceTransactions", fields: [sourceAccountId], references: [id])
+  destinationAccountId         Int?
+  destinationAccount           Account?             @relation("DestinationTransactions", fields: [destinationAccountId], references: [id])
+  recurringTemplateId          Int?
+  recurringTemplate            RecurringTemplate?   @relation(fields: [recurringTemplateId], references: [id])
+  recurrenceDate               DateTime?
+  isGenerated                  Boolean              @default(false)
+  generationKey                String?              @unique @map("generationkey")
+  generationKind               String?              @map("generationkind")
+  autoGeneratedSourceAccountId Int?                 @map("autogeneratedsourceaccountid")
+  autoGeneratedSourceAccount   Account?             @relation("AutoGeneratedSourceAccount", fields: [autoGeneratedSourceAccountId], references: [id])
+  createdAt                    DateTime             @default(now())
+  updatedAt                    DateTime             @updatedAt
+
+  @@index([date])
+  @@index([userId])
+  @@index([transactionGroupId], map: "transactionstransactiongroupididx")
+  @@index([transactionSubgroupId], map: "transactionstransactionsubgroupididx")
+  @@index([accountId])
+  @@index([sourceAccountId])
+  @@index([destinationAccountId])
+  @@index([recurringTemplateId])
+  @@index([recurrenceDate])
+  @@index([autoGeneratedSourceAccountId], map: "transactionsautogeneratedsourceaccountididx")
+  @@map("transactions")
+}
+
+model RecurringTemplate {
+  id           Int           @id @default(autoincrement())
+  accountId    Int
+  userId       Int           @map("userid")
+  user         User          @relation(fields: [userId], references: [id])
+  account      Account       @relation(fields: [accountId], references: [id])
+  info         String
+  amount       Decimal       @db.Decimal(10, 2)
+  startDate    DateTime
+  endDate      DateTime?
+  multiplier   Int           @default(1)
+  period       String
+  dayOfMonth   Int?
+  isActive     Boolean       @default(true)
+  transactionGroupId    Int?                 @map("transactiongroupid")
+  transactionGroup      TransactionGroup?    @relation(fields: [transactionGroupId], references: [id])
+  transactionSubgroupId Int?                 @map("transactionsubgroupid")
+  transactionSubgroup   TransactionSubgroup? @relation(fields: [transactionSubgroupId], references: [id])
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  transactions Transaction[]
+
+  @@index([transactionGroupId], map: "recurringtemplatestransactiongroupididx")
+  @@index([userId])
+  @@index([transactionSubgroupId], map: "recurringtemplatestransactionsubgroupididx")
+  @@map("recurring_templates")
+}
