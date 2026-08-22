@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { createHash, randomBytes } from 'crypto';
 import { PrismaService } from './prisma.service';
@@ -20,6 +20,14 @@ export class AuthService {
 
   private publicUser(user: AuthenticatedUser) {
     return { id: user.id, username: user.username, role: user.role, isActive: user.isActive };
+  }
+
+  private normalizeUsername(username: string) {
+    const normalizedUsername = username?.trim();
+    if (!normalizedUsername || !/^[a-zA-Z0-9._-]{3,191}$/.test(normalizedUsername)) {
+      throw new BadRequestException('Nazwa użytkownika może zawierać litery, cyfry, kropki, podkreślenia i myślniki (min. 3 znaki).');
+    }
+    return normalizedUsername;
   }
 
   async login(username: string, password: string) {
@@ -77,10 +85,7 @@ export class AuthService {
   }
 
   async createUser(username: string, password: string, role = 'USER') {
-    const normalizedUsername = username?.trim();
-    if (!normalizedUsername || !/^[a-zA-Z0-9._-]{3,191}$/.test(normalizedUsername)) {
-      throw new BadRequestException('Nazwa użytkownika może zawierać litery, cyfry, kropki, podkreślenia i myślniki (min. 3 znaki).');
-    }
+    const normalizedUsername = this.normalizeUsername(username);
     if (password.length < 8) {
       throw new BadRequestException('Hasło musi mieć co najmniej 8 znaków.');
     }
@@ -89,6 +94,9 @@ export class AuthService {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
+    const existingUser = await this.prisma.user.findUnique({ where: { username: normalizedUsername } });
+    if (existingUser) throw new ConflictException('Użytkownik o tej nazwie już istnieje.');
+
     const user = await this.prisma.$transaction(async (tx) => {
       const created = await tx.user.create({
         data: { username: normalizedUsername, passwordHash, role },
@@ -117,7 +125,16 @@ export class AuthService {
     return users.map((user) => this.publicUser(user));
   }
 
-  async updateUser(userId: number, data: { isActive?: boolean; role?: string; password?: string }) {
+  async updateUser(
+    userId: number,
+    data: { username?: string; isActive?: boolean; role?: string; password?: string },
+    actingUserId: number,
+  ) {
+    const existingUser = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!existingUser) throw new NotFoundException('Nie znaleziono użytkownika.');
+    if (userId === actingUserId && (data.isActive === false || (data.role !== undefined && data.role !== 'ADMIN'))) {
+      throw new BadRequestException('Nie możesz wygasić własnego konta administratora ani odebrać mu uprawnień.');
+    }
     if (data.role !== undefined && !['USER', 'ADMIN'].includes(data.role)) {
       throw new BadRequestException('Nieprawidłowa rola użytkownika.');
     }
@@ -126,6 +143,12 @@ export class AuthService {
     }
 
     const updateData: Record<string, unknown> = {};
+    if (data.username !== undefined) {
+      const username = this.normalizeUsername(data.username);
+      const duplicate = await this.prisma.user.findFirst({ where: { username, id: { not: userId } } });
+      if (duplicate) throw new ConflictException('Użytkownik o tej nazwie już istnieje.');
+      updateData.username = username;
+    }
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
     if (data.role !== undefined) updateData.role = data.role;
     if (data.password !== undefined) updateData.passwordHash = await bcrypt.hash(data.password, 12);

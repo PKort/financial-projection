@@ -4,6 +4,9 @@ type ActiveTab = 'transaction' | 'analytics' | 'transfer' | 'recurring' | 'accou
 type ViewMode = 'transactions' | 'analytics' | 'recurring' | 'accounts' | 'categories' | 'users';
 
 type AuthUser = { id: number; username: string; role: 'USER' | 'ADMIN'; isActive: boolean };
+type ManagedUserForm = { username: string; password: string; role: 'USER' | 'ADMIN'; isActive: boolean };
+
+const emptyManagedUserForm: ManagedUserForm = { username: '', password: '', role: 'USER', isActive: true };
 
 const fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
   const token = localStorage.getItem('projection_auth_token');
@@ -515,6 +518,11 @@ export default function App() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [managedUsers, setManagedUsers] = useState<AuthUser[]>([]);
+  const [managedUserForm, setManagedUserForm] = useState<ManagedUserForm>(emptyManagedUserForm);
+  const [editingManagedUserId, setEditingManagedUserId] = useState<number | null>(null);
+  const [isManagedUserModalOpen, setIsManagedUserModalOpen] = useState(false);
+  const [passwordUser, setPasswordUser] = useState<AuthUser | null>(null);
+  const [managedUserPassword, setManagedUserPassword] = useState('');
   const [timeline, setTimeline] = useState<ProjectionDay[]>([]);
   const [summary, setSummary] = useState<ProjectionSummary>(emptySummary);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -710,11 +718,11 @@ export default function App() {
       }
     };
 
-    if (authUser) loadDefaultRange();
+    if (authUser?.role === 'USER') loadDefaultRange();
   }, [authUser]);
 
   useEffect(() => {
-    if (!authUser || !isDefaultRangeReady || !projectionStart || !projectionEnd) return;
+    if (authUser?.role !== 'USER' || !isDefaultRangeReady || !projectionStart || !projectionEnd) return;
     fetchData();
   }, [authUser, isDefaultRangeReady, projectionStart, projectionEnd]);
 
@@ -744,28 +752,68 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (authUser?.role !== 'ADMIN' || viewMode !== 'users') return;
+    if (authUser?.role !== 'ADMIN') return;
     loadManagedUsers().catch((err: any) => setErrorMessage(err?.message ?? 'Nie udało się pobrać użytkowników.'));
-  }, [authUser, viewMode]);
+  }, [authUser]);
 
-  const createManagedUser = async () => {
-    const username = window.prompt('Nazwa użytkownika:');
-    if (!username) return;
-    const password = window.prompt('Hasło początkowe (min. 8 znaków):');
-    if (!password) return;
+  const saveManagedUser = async (event: React.FormEvent) => {
+    event.preventDefault();
     try {
-      const response = await fetch('/api/admin/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+      setErrorMessage('');
+      const response = await fetch(editingManagedUserId ? `/api/admin/users/${editingManagedUserId}` : '/api/admin/users', {
+        method: editingManagedUserId ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editingManagedUserId
+          ? { username: managedUserForm.username, role: managedUserForm.role, isActive: managedUserForm.isActive }
+          : managedUserForm),
+      });
       if (!response.ok) throw new Error(await getErrorText(response));
       await loadManagedUsers();
-    } catch (err: any) { setErrorMessage(err?.message ?? 'Nie udało się utworzyć użytkownika.'); }
+      setIsManagedUserModalOpen(false);
+      setManagedUserForm(emptyManagedUserForm);
+      setEditingManagedUserId(null);
+      setSuccessMessage(editingManagedUserId ? 'Dane użytkownika zostały zapisane.' : 'Użytkownik został dodany.');
+    } catch (err: any) { setErrorMessage(err?.message ?? 'Nie udało się zapisać użytkownika.'); }
   };
 
-  const updateManagedUser = async (id: number, data: Partial<Pick<AuthUser, 'isActive' | 'role'>> & { password?: string }) => {
+  const updateManagedUser = async (id: number, data: Partial<Pick<AuthUser, 'username' | 'isActive' | 'role'>> & { password?: string }) => {
     try {
+      setErrorMessage('');
       const response = await fetch(`/api/admin/users/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
       if (!response.ok) throw new Error(await getErrorText(response));
       await loadManagedUsers();
-    } catch (err: any) { setErrorMessage(err?.message ?? 'Nie udało się zapisać użytkownika.'); }
+      setSuccessMessage(data.password ? 'Hasło zostało zmienione.' : 'Status użytkownika został zmieniony.');
+      return true;
+    } catch (err: any) {
+      setErrorMessage(err?.message ?? 'Nie udało się zapisać użytkownika.');
+      return false;
+    }
+  };
+
+  const openCreateManagedUser = () => {
+    setEditingManagedUserId(null);
+    setManagedUserForm(emptyManagedUserForm);
+    setIsManagedUserModalOpen(true);
+  };
+
+  const openEditManagedUser = (user: AuthUser) => {
+    setEditingManagedUserId(user.id);
+    setManagedUserForm({ username: user.username, password: '', role: user.role, isActive: user.isActive });
+    setIsManagedUserModalOpen(true);
+  };
+
+  const expireManagedUser = async (user: AuthUser) => {
+    if (!window.confirm(`Czy na pewno wygasić konto „${user.username}”? Użytkownik utraci dostęp do systemu.`)) return;
+    await updateManagedUser(user.id, { isActive: false });
+  };
+
+  const saveManagedUserPassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!passwordUser) return;
+    if (await updateManagedUser(passwordUser.id, { password: managedUserPassword })) {
+      setPasswordUser(null);
+      setManagedUserPassword('');
+    }
   };
 
   const availableTransactionSubgroups = useMemo<TransactionSubgroup[]>(() => {
@@ -1949,6 +1997,90 @@ export default function App() {
   if (!authReady) return <main className="flex min-h-screen items-center justify-center bg-gray-950 text-gray-300">Sprawdzanie sesji…</main>;
   if (!authUser) return <LoginScreen onLogin={(user) => { setAuthUser(user); setIsDefaultRangeReady(false); }} />;
 
+  if (authUser.role === 'ADMIN') return (
+    <main className="min-h-screen bg-gray-950 px-4 py-6 pt-[calc(1.5rem+env(safe-area-inset-top))] text-gray-100 sm:px-6">
+      <div className="mx-auto max-w-6xl space-y-6">
+        <header className="flex flex-col gap-4 border-b border-gray-800 pb-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-blue-400">Panel administratora</p>
+            <h1 className="mt-1 text-3xl font-bold">Zarządzanie użytkownikami</h1>
+            <p className="mt-1 text-sm text-gray-400">Dodawaj konta, zmieniaj ich dane i kontroluj dostęp do systemu.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-gray-300">
+            <span className="mr-1">{authUser.username}</span>
+            <button type="button" onClick={() => setIsPasswordChangeOpen(true)} className="rounded border border-gray-700 px-3 py-2 hover:bg-gray-800">Zmień swoje hasło</button>
+            <button type="button" onClick={logout} className="rounded border border-gray-700 px-3 py-2 hover:bg-gray-800">Wyloguj</button>
+          </div>
+        </header>
+
+        {errorMessage && <div className="rounded-lg border border-red-800 bg-red-950 px-4 py-3 text-red-300">{errorMessage}</div>}
+        {successMessage && <div className="rounded-lg border border-green-800 bg-green-950 px-4 py-3 text-green-300">{successMessage}</div>}
+
+        <section className="overflow-hidden rounded-xl border border-gray-700 bg-gray-900 shadow-xl">
+          <div className="flex flex-col gap-3 border-b border-gray-700 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+            <div>
+              <h2 className="text-lg font-semibold">Użytkownicy w systemie</h2>
+              <p className="mt-1 text-sm text-gray-400">Łącznie: {managedUsers.length}</p>
+            </div>
+            <button type="button" onClick={openCreateManagedUser} className="rounded bg-blue-600 px-4 py-2 font-medium hover:bg-blue-500">Dodaj użytkownika</button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left text-sm">
+              <thead className="bg-gray-800 text-xs uppercase tracking-wide text-gray-400">
+                <tr><th className="px-5 py-3">Nazwa</th><th className="px-5 py-3">Rola</th><th className="px-5 py-3">Status</th><th className="px-5 py-3 text-right">Akcje</th></tr>
+              </thead>
+              <tbody className="divide-y divide-gray-800">
+                {managedUsers.map((user) => (
+                  <tr key={user.id} className="hover:bg-gray-800/60">
+                    <td className="px-5 py-4 font-medium">{user.username}{user.id === authUser.id && <span className="ml-2 text-xs text-gray-500">(Ty)</span>}</td>
+                    <td className="px-5 py-4 text-gray-300">{user.role === 'ADMIN' ? 'Administrator' : 'Użytkownik'}</td>
+                    <td className="px-5 py-4"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${user.isActive ? 'bg-emerald-950 text-emerald-300' : 'bg-gray-700 text-gray-300'}`}>{user.isActive ? 'Aktywny' : 'Wygasły'}</span></td>
+                    <td className="px-5 py-4"><div className="flex justify-end gap-2">
+                      <button type="button" onClick={() => openEditManagedUser(user)} className="rounded border border-gray-600 px-3 py-1.5 hover:bg-gray-700">Edytuj</button>
+                      <button type="button" onClick={() => { setPasswordUser(user); setManagedUserPassword(''); }} className="rounded border border-gray-600 px-3 py-1.5 hover:bg-gray-700">Zmień hasło</button>
+                      {user.isActive ? <button type="button" disabled={user.id === authUser.id} onClick={() => expireManagedUser(user)} className="rounded border border-red-800 px-3 py-1.5 text-red-300 hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-40">Wygaś</button> : <button type="button" onClick={() => updateManagedUser(user.id, { isActive: true })} className="rounded border border-emerald-800 px-3 py-1.5 text-emerald-300 hover:bg-emerald-950">Aktywuj</button>}
+                    </div></td>
+                  </tr>
+                ))}
+                {managedUsers.length === 0 && <tr><td colSpan={4} className="px-5 py-10 text-center text-gray-400">Brak użytkowników do wyświetlenia.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      {isManagedUserModalOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+        <form onSubmit={saveManagedUser} className="w-full max-w-md space-y-4 rounded-xl border border-gray-700 bg-gray-900 p-6 shadow-2xl">
+          <h2 className="text-xl font-semibold">{editingManagedUserId ? 'Edytuj użytkownika' : 'Nowy użytkownik'}</h2>
+          <label className="block text-sm">Nazwa użytkownika<input required minLength={3} value={managedUserForm.username} onChange={(e) => setManagedUserForm((prev) => ({ ...prev, username: e.target.value }))} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2" /></label>
+          {!editingManagedUserId && <label className="block text-sm">Hasło początkowe<input required minLength={8} type="password" value={managedUserForm.password} onChange={(e) => setManagedUserForm((prev) => ({ ...prev, password: e.target.value }))} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2" /></label>}
+          <label className="block text-sm">Rola<select value={managedUserForm.role} disabled={editingManagedUserId === authUser.id} onChange={(e) => setManagedUserForm((prev) => ({ ...prev, role: e.target.value as 'USER' | 'ADMIN' }))} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2"><option value="USER">Użytkownik</option><option value="ADMIN">Administrator</option></select></label>
+          {editingManagedUserId && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={managedUserForm.isActive} disabled={editingManagedUserId === authUser.id} onChange={(e) => setManagedUserForm((prev) => ({ ...prev, isActive: e.target.checked }))} /> Konto aktywne</label>}
+          <div className="flex justify-end gap-2 pt-2"><button type="button" onClick={() => setIsManagedUserModalOpen(false)} className="rounded border border-gray-700 px-4 py-2">Anuluj</button><button className="rounded bg-blue-600 px-4 py-2 hover:bg-blue-500">Zapisz</button></div>
+        </form>
+      </div>}
+
+      {passwordUser && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+        <form onSubmit={saveManagedUserPassword} className="w-full max-w-sm space-y-4 rounded-xl border border-gray-700 bg-gray-900 p-6 shadow-2xl">
+          <div><h2 className="text-xl font-semibold">Zmień hasło</h2><p className="mt-1 text-sm text-gray-400">Użytkownik: {passwordUser.username}</p></div>
+          <label className="block text-sm">Nowe hasło<input autoFocus required minLength={8} type="password" value={managedUserPassword} onChange={(e) => setManagedUserPassword(e.target.value)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2" /></label>
+          <p className="text-xs text-gray-400">Po zmianie hasła wszystkie aktywne sesje tego użytkownika zostaną zakończone.</p>
+          <div className="flex justify-end gap-2"><button type="button" onClick={() => setPasswordUser(null)} className="rounded border border-gray-700 px-4 py-2">Anuluj</button><button className="rounded bg-blue-600 px-4 py-2 hover:bg-blue-500">Zmień hasło</button></div>
+        </form>
+      </div>}
+
+      {isPasswordChangeOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+        <form onSubmit={changeOwnPassword} className="w-full max-w-sm space-y-4 rounded-xl border border-gray-700 bg-gray-900 p-6 shadow-2xl">
+          <h2 className="text-xl font-semibold">Zmiana własnego hasła</h2>
+          <label className="block text-sm">Obecne hasło<input required type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2" /></label>
+          <label className="block text-sm">Nowe hasło<input required minLength={8} type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2" /></label>
+          <div className="flex justify-end gap-2"><button type="button" onClick={() => setIsPasswordChangeOpen(false)} className="rounded border border-gray-700 px-4 py-2">Anuluj</button><button className="rounded bg-blue-600 px-4 py-2 hover:bg-blue-500">Zapisz</button></div>
+        </form>
+      </div>}
+    </main>
+  );
+
   return (
     <div className="min-h-screen bg-gray-950 pt-[env(safe-area-inset-top)] text-gray-100">
       <div className="mx-auto max-w-7xl space-y-5 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:space-y-6 sm:p-6">
@@ -1962,7 +2094,7 @@ export default function App() {
 
           <div className="flex flex-col gap-3 md:items-end">
             <div className="flex flex-wrap items-center justify-end gap-2 text-sm text-gray-300">
-              <span>{authUser.username}{authUser.role === 'ADMIN' ? ' · administrator' : ''}</span>
+              <span>{authUser.username}</span>
               <button type="button" onClick={() => setIsPasswordChangeOpen(true)} className="rounded border border-gray-700 px-3 py-1 hover:bg-gray-800">Zmień hasło</button>
               <button type="button" onClick={logout} className="rounded border border-gray-700 px-3 py-1 hover:bg-gray-800">Wyloguj</button>
             </div>
@@ -2705,7 +2837,7 @@ export default function App() {
 		</div>
         ) : viewMode === 'users' ? (
           <section className="space-y-4 rounded-lg border border-gray-700 bg-gray-800 p-4">
-            <div className="flex items-center justify-between"><div><h2 className="text-lg font-semibold">Użytkownicy</h2><p className="text-sm text-gray-400">Administrator nie ma dostępu do danych finansowych innych użytkowników.</p></div><button type="button" onClick={createManagedUser} className="rounded bg-blue-600 px-3 py-2 hover:bg-blue-500">Dodaj użytkownika</button></div>
+            <div className="flex items-center justify-between"><div><h2 className="text-lg font-semibold">Użytkownicy</h2><p className="text-sm text-gray-400">Administrator nie ma dostępu do danych finansowych innych użytkowników.</p></div><button type="button" onClick={openCreateManagedUser} className="rounded bg-blue-600 px-3 py-2 hover:bg-blue-500">Dodaj użytkownika</button></div>
             <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="border-b border-gray-700 text-gray-400"><tr><th className="p-2">Nazwa</th><th className="p-2">Rola</th><th className="p-2">Status</th><th className="p-2">Akcje</th></tr></thead><tbody>{managedUsers.map((user) => <tr key={user.id} className="border-b border-gray-700/60"><td className="p-2">{user.username}</td><td className="p-2">{user.role === 'ADMIN' ? 'Administrator' : 'Użytkownik'}</td><td className="p-2">{user.isActive ? 'Aktywny' : 'Zablokowany'}</td><td className="flex flex-wrap gap-2 p-2"><button type="button" onClick={() => updateManagedUser(user.id, { isActive: !user.isActive })} className="rounded border border-gray-600 px-2 py-1">{user.isActive ? 'Zablokuj' : 'Odblokuj'}</button><button type="button" onClick={() => { const password = window.prompt(`Nowe hasło dla ${user.username}:`); if (password) updateManagedUser(user.id, { password }); }} className="rounded border border-gray-600 px-2 py-1">Ustaw hasło</button></td></tr>)}</tbody></table></div>
           </section>
         ) : (

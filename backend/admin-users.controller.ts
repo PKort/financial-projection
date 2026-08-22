@@ -29,9 +29,9 @@ export class AdminUsersController {
   update(
     @Req() request: any,
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { isActive?: boolean; role?: string; password?: string },
+    @Body() body: { username?: string; isActive?: boolean; role?: string; password?: string },
   ) {
     this.requireAdmin(request);
-    return this.authService.updateUser(id, body);
+    return this.authService.updateUser(id, body, request.user.id);
   }
 }
