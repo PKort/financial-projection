@@ -34,7 +34,7 @@ Web application for managing personal finances and projecting account balances. 
 <img
   src="docs/images/user_settings.png"
   alt="User settings"
-  width="900"
+  width="450"
 />
 
 ## Table of contents
