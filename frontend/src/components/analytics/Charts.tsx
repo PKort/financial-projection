@@ -1,4 +1,5 @@
 import { formatCurrency } from '../../utils/formatting';
+import { useI18n } from '../../i18n/I18nProvider';
 
 export function AnalyticsBar({ value, max, colorClass = 'bg-blue-500' }: { value: number; max: number; colorClass?: string }) {
   const width = max > 0 ? Math.max(4, (value / max) * 100) : 0;
@@ -11,6 +12,7 @@ export function PieDonutChart({ data, total, onSelect, selectedName }: {
   onSelect?: (name: string) => void;
   selectedName?: string | null;
 }) {
+  const { locale, t } = useI18n();
   const size = 220;
   const strokeWidth = 36;
   const radius = (size - strokeWidth) / 2;
@@ -33,8 +35,8 @@ export function PieDonutChart({ data, total, onSelect, selectedName }: {
         })}
       </svg>
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
-        <div className="text-xs uppercase tracking-wide text-gray-400">Wydatki</div>
-        <div className="text-lg font-semibold text-white">{formatCurrency(total, 'PLN')}</div>
+        <div className="text-xs uppercase tracking-wide text-gray-400">{t('Wydatki')}</div>
+        <div className="text-lg font-semibold text-white">{formatCurrency(total, 'PLN', locale)}</div>
         {selectedName && <div className="mt-1 max-w-[120px] text-xs text-gray-300">{selectedName}</div>}
       </div>
     </div>
@@ -44,9 +46,9 @@ export function PieDonutChart({ data, total, onSelect, selectedName }: {
         const isSelected = selectedName === item.name;
         return <button key={item.name} type="button" onClick={() => onSelect?.(item.name)} className={`flex w-full items-center justify-between gap-3 rounded border px-3 py-2 text-left transition ${isSelected ? 'border-blue-500 bg-gray-700' : 'border-gray-700 bg-gray-800 hover:bg-gray-700'}`}>
           <div className="flex min-w-0 items-center gap-3"><span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: colors[index % colors.length] }} /><span className="truncate text-sm text-gray-200">{item.name}</span></div>
-          <div className="shrink-0 text-right"><div className="font-mono text-sm text-white">{formatCurrency(item.amount, 'PLN')}</div><div className="text-xs text-gray-400">{share.toFixed(1)}%</div></div>
+          <div className="shrink-0 text-right"><div className="font-mono text-sm text-white">{formatCurrency(item.amount, 'PLN', locale)}</div><div className="text-xs text-gray-400">{share.toFixed(1)}%</div></div>
         </button>;
-      }) : <div className="text-sm text-gray-400">Brak danych.</div>}
+      }) : <div className="text-sm text-gray-400">{t('Brak danych.')}</div>}
     </div>
   </div>;
 }

@@ -6,6 +6,9 @@ import { PrismaService } from './prisma.service';
 export type AuthenticatedUser = {
   id: number;
   username: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  email?: string | null;
   role: string;
   isActive: boolean;
 };
@@ -19,7 +22,43 @@ export class AuthService {
   }
 
   private publicUser(user: AuthenticatedUser) {
-    return { id: user.id, username: user.username, role: user.role, isActive: user.isActive };
+    return {
+      id: user.id,
+      username: user.username,
+      firstName: user.firstName ?? null,
+      lastName: user.lastName ?? null,
+      email: user.email ?? null,
+      role: user.role,
+      isActive: user.isActive,
+    };
+  }
+
+  private normalizeProfileText(value: string | null | undefined, fieldName: string) {
+    const normalized = value?.trim() || null;
+    if (normalized && normalized.length > 100) {
+      throw new BadRequestException(`${fieldName} może mieć maksymalnie 100 znaków.`);
+    }
+    return normalized;
+  }
+
+  async updateProfile(userId: number, data: { firstName?: string | null; lastName?: string | null; email?: string | null }) {
+    const firstName = this.normalizeProfileText(data.firstName, 'Imię');
+    const lastName = this.normalizeProfileText(data.lastName, 'Nazwisko');
+    const email = data.email?.trim().toLowerCase() || null;
+
+    if (email && (email.length > 191 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+      throw new BadRequestException('Podaj prawidłowy adres e-mail.');
+    }
+    if (email) {
+      const duplicate = await this.prisma.user.findFirst({ where: { email, id: { not: userId } } });
+      if (duplicate) throw new ConflictException('Ten adres e-mail jest już używany.');
+    }
+
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: { firstName, lastName, email },
+    });
+    return this.publicUser(user);
   }
 
   private normalizeUsername(username: string) {

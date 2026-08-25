@@ -1,7 +1,15 @@
 export type ActiveTab = 'transaction' | 'analytics' | 'transfer' | 'recurring' | 'account' | 'category';
 export type ViewMode = 'transactions' | 'analytics' | 'recurring' | 'accounts' | 'categories' | 'users';
 
-export type AuthUser = { id: number; username: string; role: 'USER' | 'ADMIN'; isActive: boolean };
+export type AuthUser = {
+  id: number;
+  username: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  email?: string | null;
+  role: 'USER' | 'ADMIN';
+  isActive: boolean;
+};
 export type ManagedUserForm = { username: string; password: string; role: 'USER' | 'ADMIN'; isActive: boolean };
 
 export type Account = {

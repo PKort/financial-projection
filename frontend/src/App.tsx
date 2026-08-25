@@ -4,6 +4,8 @@ import { AnalyticsBar, PieDonutChart } from './components/analytics/Charts';
 import { AdminPanel } from './components/admin/AdminPanel';
 import { DeleteIcon, EditIcon, IconButton } from './components/common/Icons';
 import { LoginScreen } from './components/LoginScreen';
+import { UserMenu } from './components/user/UserMenu';
+import { useI18n } from './i18n/I18nProvider';
 import {
   EXTENDED_MONTH_THRESHOLD_DAYS, FUTURE_DAYS_VISIBLE, PAST_DAYS_VISIBLE, emptyManagedUserForm,
   emptySummary, initialCategoryFormState, initialFormData, monthEnd, monthStart, viewModeLabels,
@@ -16,11 +18,9 @@ import type {
 import { formatCurrency, formatLocalDate, getOperationDisplayInfo } from './utils/formatting';
 
 export default function App() {
+  const { language, locale, setLanguage, t } = useI18n();
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authReady, setAuthReady] = useState(false);
-  const [isPasswordChangeOpen, setIsPasswordChangeOpen] = useState(false);
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
   const [managedUsers, setManagedUsers] = useState<AuthUser[]>([]);
   const [managedUserForm, setManagedUserForm] = useState<ManagedUserForm>(emptyManagedUserForm);
   const [editingManagedUserId, setEditingManagedUserId] = useState<number | null>(null);
@@ -170,6 +170,9 @@ export default function App() {
 
       setTemplates(tempData);
       setSettings(settingsData);
+      if (settingsData.ui_locale === 'pl' || settingsData.ui_locale === 'en') {
+        setLanguage(settingsData.ui_locale);
+      }
       setDailyBudgetInput(settingsData.daily_budget ?? '130');
       setManualNextSalaryDateInput(settingsData.manual_next_salary_date ?? '');
     } catch (err: any) {
@@ -700,12 +703,12 @@ export default function App() {
 
   const formatDisplayDate = (dateStr: string | null) => {
     if (!dateStr) return '—';
-    const [year, month, day] = dateStr.split('-');
-    return `${day}.${month}.${year}`;
+    return new Intl.DateTimeFormat(locale).format(new Date(`${dateStr}T00:00:00`));
   };
 
   const formatDaysLabel = (days: number) => {
-    if (days === 1) return '1 dzień';
+    if (days === 1) return `1 ${t('dzień')}`;
+    if (language === 'en') return `${days} ${t('dni')}`;
     if (days % 10 >= 2 && days % 10 <= 4 && (days % 100 < 12 || days % 100 > 14)) {
       return `${days} dni`;
     }
@@ -1472,25 +1475,10 @@ export default function App() {
   };
 
   const accountTypeLabel = (account: Account) => {
-    return account.accountType?.name ?? `Typ #${account.accountTypeId}`;
-  };
-
-  const changeOwnPassword = async (event: React.FormEvent) => {
-    event.preventDefault();
-    try {
-      const response = await fetch('/api/auth/change-password', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ currentPassword, newPassword }),
-      });
-      if (!response.ok) throw new Error(await getErrorText(response));
-      localStorage.removeItem('projection_auth_token');
-      setAuthUser(null);
-      setIsPasswordChangeOpen(false);
-      setCurrentPassword('');
-      setNewPassword('');
-    } catch (err: any) {
-      setErrorMessage(err?.message ?? 'Nie udało się zmienić hasła.');
-    }
+    if (account.accountType?.code === 'checking') return t('Rachunek bieżący');
+    if (account.accountType?.code === 'savings') return t('Oszczędnościowe');
+    if (account.accountType?.code === 'credit_card') return t('Karta kredytowa');
+    return account.accountType?.name ?? `${t('Typ')} #${account.accountTypeId}`;
   };
 
   const logout = async () => {
@@ -1501,7 +1489,7 @@ export default function App() {
     }
   };
 
-  if (!authReady) return <main className="flex min-h-screen items-center justify-center bg-gray-950 text-gray-300">Sprawdzanie sesji…</main>;
+  if (!authReady) return <main className="flex min-h-screen items-center justify-center bg-gray-950 text-gray-300">{t('Sprawdzanie sesji…')}</main>;
   if (!authUser) return <LoginScreen onLogin={(user) => { setAuthUser(user); setIsDefaultRangeReady(false); }} />;
 
   if (authUser.role === 'ADMIN') return <AdminPanel
@@ -1509,12 +1497,10 @@ export default function App() {
     form={managedUserForm} setForm={setManagedUserForm} editingUserId={editingManagedUserId}
     isUserModalOpen={isManagedUserModalOpen} setIsUserModalOpen={setIsManagedUserModalOpen}
     passwordUser={passwordUser} setPasswordUser={setPasswordUser} password={managedUserPassword}
-    setPassword={setManagedUserPassword} isOwnPasswordModalOpen={isPasswordChangeOpen}
-    setIsOwnPasswordModalOpen={setIsPasswordChangeOpen} currentPassword={currentPassword}
-    setCurrentPassword={setCurrentPassword} newPassword={newPassword} setNewPassword={setNewPassword}
+    setPassword={setManagedUserPassword}
     onCreateUser={openCreateManagedUser} onEditUser={openEditManagedUser} onExpireUser={expireManagedUser}
     onUpdateUser={updateManagedUser} onSaveUser={saveManagedUser} onSaveUserPassword={saveManagedUserPassword}
-    onChangeOwnPassword={changeOwnPassword} onLogout={logout}
+    onLogout={logout} onUserUpdated={setAuthUser}
   />;
 
   return (
@@ -1522,7 +1508,7 @@ export default function App() {
       <div className="mx-auto max-w-7xl space-y-5 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:space-y-6 sm:p-6">
         <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Projekcja finansowa</h1>
+            <h1 className="text-3xl font-bold">{t('Projekcja finansowa')}</h1>
             <p className="mt-1 text-gray-400">
               Konta, transakcje, przelewy, płatności cykliczne i projekcja salda.
             </p>
@@ -1530,9 +1516,7 @@ export default function App() {
 
           <div className="flex flex-col gap-3 md:items-end">
             <div className="flex flex-wrap items-center justify-end gap-2 text-sm text-gray-300">
-              <span>{authUser.username}</span>
-              <button type="button" onClick={() => setIsPasswordChangeOpen(true)} className="rounded border border-gray-700 px-3 py-1 hover:bg-gray-800">Zmień hasło</button>
-              <button type="button" onClick={logout} className="rounded border border-gray-700 px-3 py-1 hover:bg-gray-800">Wyloguj</button>
+              <UserMenu user={authUser} onUserUpdated={setAuthUser} onLogout={logout} />
             </div>
             <div className="flex gap-3 md:flex-row">
             <div className="flex gap-2">
@@ -1600,17 +1584,6 @@ export default function App() {
           </div>
         )}
 
-        {isPasswordChangeOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-            <form onSubmit={changeOwnPassword} className="w-full max-w-sm space-y-4 rounded-lg border border-gray-700 bg-gray-900 p-5 shadow-xl">
-              <h2 className="text-lg font-semibold">Zmiana hasła</h2>
-              <label className="block text-sm">Obecne hasło<input required type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="mt-1 w-full rounded bg-gray-800 px-3 py-2" /></label>
-              <label className="block text-sm">Nowe hasło (min. 8 znaków)<input required minLength={8} type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="mt-1 w-full rounded bg-gray-800 px-3 py-2" /></label>
-              <div className="flex justify-end gap-2"><button type="button" onClick={() => setIsPasswordChangeOpen(false)} className="rounded border border-gray-700 px-3 py-2">Anuluj</button><button className="rounded bg-blue-600 px-3 py-2">Zapisz</button></div>
-            </form>
-          </div>
-        )}
-
         <div className="text-sm text-gray-400">
           {operationDisplayMode === 'window'
             ? `Widoczne operacje: ostatnie ${PAST_DAYS_VISIBLE} dni i najbliższe ${FUTURE_DAYS_VISIBLE} dni.`
@@ -1624,7 +1597,7 @@ export default function App() {
               onClick={() => setIsAccountListOpen((prev) => !prev)}
               className="block w-full cursor-pointer text-left"
             >
-              <h3 className="text-sm text-gray-400">Saldo całkowite</h3>
+              <h3 className="text-sm text-gray-400">{t('Saldo całkowite')}</h3>
               <p className="text-2xl font-bold">{formatCurrency(currentTotalBalance ?? 0, 'PLN')}</p>
             </button>
 
@@ -1660,7 +1633,7 @@ export default function App() {
                             type="button"
                             onClick={() => setExpandedCreditCardId(isCreditCardExpanded ? null : acc.id)}
                             className="shrink-0 rounded px-1 hover:bg-gray-700"
-                            title="Pokaż limit karty"
+                            title={t('Pokaż limit karty')}
                           >
                             {formatCurrency(balance, 'PLN')}
                           </button>
@@ -1671,7 +1644,7 @@ export default function App() {
 
                       {isCreditCardExpanded && acc.creditLimit != null && (
                         <div className="ml-6 mt-1 flex items-center justify-between text-xs text-gray-400">
-                          <span>dostępny limit:</span>
+                          <span>{t('dostępny limit')}:</span>
                           <span className="font-medium text-emerald-400">{formatCurrency(availableCredit, 'PLN')}</span>
                         </div>
                       )}
@@ -1686,7 +1659,7 @@ export default function App() {
             className="cursor-pointer rounded-lg border border-gray-700 bg-gray-800 p-4"
             onClick={() => setIsSalaryCardExpanded((prev) => !prev)}
           >
-            <h3 className="text-sm text-gray-400">Saldo na dzień następnej wypłaty</h3>
+            <h3 className="text-sm text-gray-400">{t('Saldo na dzień następnej wypłaty')}</h3>
             <p className="text-2xl font-bold">{formatCurrency(salaryTotalBalance, 'PLN')}</p>
 
             {isSalaryCardExpanded && (
@@ -1714,7 +1687,7 @@ export default function App() {
                     </label>
                   ))
                 ) : (
-                  <div className="text-gray-400">Brak danych per konto dla dnia wypłaty.</div>
+                  <div className="text-gray-400">{t('Brak danych per konto dla dnia wypłaty.')}</div>
                 )}
               </div>
             )}
@@ -1725,13 +1698,13 @@ export default function App() {
             onClick={() => setIsBudgetCardExpanded((prev) => !prev)}
           >
             <div className="flex items-start justify-between">
-              <h3 className="text-sm text-gray-400">Nad / pod kreską</h3>
+              <h3 className="text-sm text-gray-400">{t('Nad / pod kreską')}</h3>
               <p className={`text-2xl font-bold ${varianceColorClass}`}>{formatCurrency(variance, 'PLN')}</p>
             </div>
 
             <div className="mt-3 border-t border-gray-700 pt-3">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-300">Dostępny budżet dzienny</span>
+                <span className="text-gray-300">{t('Dostępny budżet dzienny')}</span>
                 <span className={`font-semibold ${availableBudgetColorClass}`}>
                   {formatCurrency(availableDailyBudget, 'PLN')}
                 </span>
@@ -1744,12 +1717,12 @@ export default function App() {
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-gray-300">Liczba dni do wypłaty</span>
+                  <span className="text-gray-300">{t('Liczba dni do wypłaty')}</span>
                   <span>{daysToSalary}</span>
                 </div>
 
                 <div className="space-y-2">
-                  <div className="text-gray-300">Następna wypłata</div>
+                  <div className="text-gray-300">{t('Następna wypłata')}</div>
                   <div className="flex gap-2">
                     <input
                       type="date"
@@ -1769,7 +1742,7 @@ export default function App() {
                 </div>
 
                 <div className="space-y-2">
-                  <div className="text-gray-300">Zadeklarowany budżet dzienny</div>
+                  <div className="text-gray-300">{t('Zadeklarowany budżet dzienny')}</div>
                   <div className="flex gap-2">
                     <input
                       type="number"
@@ -1796,7 +1769,7 @@ export default function App() {
           {viewMode === 'transactions' && (
             <div className="flex min-w-0 flex-wrap gap-2">
               <div className="rounded border border-gray-700 bg-gray-900 px-3 py-2">
-                <div className="text-xs text-gray-400">Saldo bieżące</div>
+                <div className="text-xs text-gray-400">{t('Saldo bieżące')}</div>
                 <div className="whitespace-nowrap font-semibold">
                   {formatCurrency(currentTotalBalance ?? 0, 'PLN')}
                 </div>
@@ -1818,7 +1791,7 @@ export default function App() {
               onClick={() => setIsViewMenuOpen((prev) => !prev)}
               className="w-full rounded border border-gray-700 bg-gray-800 px-4 py-2 hover:bg-gray-700 md:w-auto"
             >
-              Widok: {viewModeLabels[viewMode]} ▾
+              {t('Widok')}: {t(viewModeLabels[viewMode])} ▾
             </button>
 
             {isViewMenuOpen && (
@@ -1835,7 +1808,7 @@ export default function App() {
                       viewMode === mode ? 'text-blue-400' : 'text-gray-100'
                     }`}
                   >
-                    {viewModeLabels[mode]}
+                    {t(viewModeLabels[mode])}
                   </button>
                 ))}
               </div>
@@ -1851,13 +1824,13 @@ export default function App() {
               onClick={openDefaultOperationModal}
               className="flex-1 rounded-l bg-blue-600 px-4 py-2 hover:bg-blue-500 md:flex-none"
             >
-              Nowa operacja
+              {t('Nowa operacja')}
             </button>
             <button
               type="button"
               onClick={() => setIsCreateMenuOpen((previous) => !previous)}
               className="rounded-r border-l border-blue-400/40 bg-blue-600 px-3 py-2 hover:bg-blue-500"
-              aria-label="Pokaż dodatkowe opcje"
+              aria-label={t('Pokaż dodatkowe opcje')}
               aria-expanded={isCreateMenuOpen}
               aria-haspopup="menu"
             >
@@ -1871,21 +1844,21 @@ export default function App() {
                   onClick={() => openCreateModal('transfer')}
                   className="block w-full px-4 py-2 text-left hover:bg-gray-800"
                 >
-                  Przelew
+                  {t('Przelew')}
                 </button>
                 <button
                   type="button"
                   onClick={() => openCreateModal('recurring')}
                   className="block w-full px-4 py-2 text-left hover:bg-gray-800"
                 >
-                  Cykliczne
+                  {t('Cykliczne')}
                 </button>
                 <button
                   type="button"
                   onClick={() => openCreateModal('account')}
                   className="block w-full px-4 py-2 text-left hover:bg-gray-800"
                 >
-                  Konto
+                  {t('Konto')}
                 </button>
               </div>
             )}
@@ -2847,7 +2820,7 @@ export default function App() {
                     >
                       <td className="p-4 align-middle">{account.name}</td>
                       <td className="p-4 align-middle">
-                        {account.accountType?.name ?? `Typ ${account.accountTypeId}`}
+                        {accountTypeLabel(account)}
                       </td>
                       <td className="p-4 align-middle">
                         {formatCurrency(account.initialBalance, 'PLN')}
@@ -2912,13 +2885,13 @@ export default function App() {
           <div className="w-full max-w-2xl rounded-xl border border-gray-700 bg-gray-900 p-6">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-xl font-semibold">
-                {activeTab === 'transaction' && (editingTransactionId ? 'Edytuj transakcję' : 'Dodaj operację')}
-                {activeTab === 'transfer' && (editingTransactionId ? 'Edytuj przelew' : 'Dodaj przelew')}
-                {activeTab === 'recurring' && (editingTemplateId ? 'Edytuj szablon cykliczny' : 'Dodaj cykliczne')}
-                {activeTab === 'account' && (editingAccountId ? 'Edytuj konto' : 'Dodaj konto')}
+                {activeTab === 'transaction' && t(editingTransactionId ? 'Edytuj transakcję' : 'Dodaj operację')}
+                {activeTab === 'transfer' && t(editingTransactionId ? 'Edytuj przelew' : 'Dodaj przelew')}
+                {activeTab === 'recurring' && t(editingTemplateId ? 'Edytuj szablon cykliczny' : 'Dodaj cykliczne')}
+                {activeTab === 'account' && t(editingAccountId ? 'Edytuj konto' : 'Dodaj konto')}
               </h2>
               <button onClick={closeModal} className="text-gray-400 hover:text-white" type="button">
-                Zamknij
+                {t('Zamknij')}
               </button>
             </div>
 
@@ -2930,7 +2903,7 @@ export default function App() {
                 onClick={() => setActiveTab('transaction')}
                 type="button"
               >
-                Operacja
+                {t('Operacja')}
               </button>
               <button
                 className={`rounded px-3 py-2 ${
@@ -2939,7 +2912,7 @@ export default function App() {
                 onClick={() => setActiveTab('transfer')}
                 type="button"
               >
-                Przelew
+                {t('Przelew')}
               </button>
               <button
                 className={`rounded px-3 py-2 ${
@@ -2948,7 +2921,7 @@ export default function App() {
                 onClick={() => setActiveTab('recurring')}
                 type="button"
               >
-                Cykliczne
+                {t('Cykliczne')}
               </button>
               <button
                 className={`rounded px-3 py-2 ${
@@ -2957,7 +2930,7 @@ export default function App() {
                 onClick={() => setActiveTab('account')}
                 type="button"
               >
-                Konto
+                {t('Konto')}
               </button>
             </div>
 
@@ -2975,7 +2948,7 @@ export default function App() {
                     value={formData.accountId}
                     onChange={(e) => setFormData({ ...formData, accountId: e.target.value })}
                   >
-                    <option value="">Wybierz konto</option>
+                    <option value="">{t('Wybierz konto')}</option>
                     {accounts.map((a) => (
                       <option key={a.id} value={a.id}>
                         {a.name}
@@ -2984,7 +2957,7 @@ export default function App() {
                   </select>
                   <input
                     type="text"
-                    placeholder="Opis"
+                    placeholder={t('Opis')}
                     className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                     value={formData.info}
                     onChange={handleInfoChange}
@@ -2997,7 +2970,7 @@ export default function App() {
                   )}
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div className="space-y-2">
-                      <label className="block text-sm font-medium text-gray-200">Grupa</label>
+                      <label className="block text-sm font-medium text-gray-200">{t('Grupa')}</label>
                       <select
                         className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                         value={formData.transactionGroupId}
@@ -3009,7 +2982,7 @@ export default function App() {
                           }))
                         }
                       >
-                        <option value="">Bez grupy</option>
+                        <option value="">{t('Bez grupy')}</option>
                         {transactionGroups
                           .filter((group) => group.isActive)
                           .map((group) => (
@@ -3020,7 +2993,7 @@ export default function App() {
                       </select>
                     </div>
                     <div className="space-y-2">
-                      <label className="block text-sm font-medium text-gray-200">Podgrupa</label>
+                      <label className="block text-sm font-medium text-gray-200">{t('Podgrupa')}</label>
                       <select
                         className="w-full rounded border border-gray-700 bg-gray-800 p-2 disabled:cursor-not-allowed disabled:opacity-50"
                         value={formData.transactionSubgroupId}
@@ -3049,7 +3022,7 @@ export default function App() {
                     <input
                       type="number"
                       step="0.01"
-                      placeholder="Kwota wpłata"
+                      placeholder={t('Kwota wpłata')}
                       className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                       value={formData.income}
                       onChange={(e) => setFormData({ ...formData, income: e.target.value })}
@@ -3057,7 +3030,7 @@ export default function App() {
                     <input
                       type="number"
                       step="0.01"
-                      placeholder="Kwota wypłata"
+                      placeholder={t('Kwota wypłata')}
                       className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                       value={formData.expense}
                       onChange={(e) => setFormData({ ...formData, expense: e.target.value })}
@@ -3087,7 +3060,7 @@ export default function App() {
                     value={formData.sourceAccountId}
                     onChange={(e) => setFormData({ ...formData, sourceAccountId: e.target.value })}
                   >
-                    <option value="">Z konta</option>
+                    <option value="">{t('Z konta')}</option>
                     {accounts.map((a) => (
                       <option key={a.id} value={a.id}>
                         {a.name}
@@ -3099,7 +3072,7 @@ export default function App() {
                     value={formData.destinationAccountId}
                     onChange={(e) => setFormData({ ...formData, destinationAccountId: e.target.value })}
                   >
-                    <option value="">Na konto</option>
+                    <option value="">{t('Na konto')}</option>
                     {accounts.map((a) => (
                       <option key={a.id} value={a.id}>
                         {a.name}
@@ -3108,7 +3081,7 @@ export default function App() {
                   </select>
                   <input
                     type="text"
-                    placeholder="Opis"
+                    placeholder={t('Opis')}
                     className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                     value={formData.info}
                     onChange={handleInfoChange}
@@ -3121,7 +3094,7 @@ export default function App() {
                   )}
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div className="space-y-2">
-                      <label className="block text-sm font-medium text-gray-200">Grupa</label>
+                      <label className="block text-sm font-medium text-gray-200">{t('Grupa')}</label>
                       <select
                         className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                         value={formData.transactionGroupId}
@@ -3133,7 +3106,7 @@ export default function App() {
                           }))
                         }
                       >
-                        <option value="">Bez grupy</option>
+                        <option value="">{t('Bez grupy')}</option>
                         {transactionGroups
                           .filter((group) => group.isActive)
                           .map((group) => (
@@ -3144,7 +3117,7 @@ export default function App() {
                       </select>
                     </div>
                     <div className="space-y-2">
-                      <label className="block text-sm font-medium text-gray-200">Podgrupa</label>
+                      <label className="block text-sm font-medium text-gray-200">{t('Podgrupa')}</label>
                       <select
                         className="w-full rounded border border-gray-700 bg-gray-800 p-2 disabled:cursor-not-allowed disabled:opacity-50"
                         value={formData.transactionSubgroupId}
@@ -3172,7 +3145,7 @@ export default function App() {
                   <input
                     type="number"
                     step="0.01"
-                    placeholder="Kwota"
+                    placeholder={t('Kwota')}
                     className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                     value={formData.amount}
                     onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
@@ -3187,7 +3160,7 @@ export default function App() {
                     value={formData.accountId}
                     onChange={(e) => setFormData({ ...formData, accountId: e.target.value })}
                   >
-                    <option value="">Konto</option>
+                    <option value="">{t('Konto')}</option>
                     {accounts.map((a) => (
                       <option key={a.id} value={a.id}>
                         {a.name}
@@ -3196,7 +3169,7 @@ export default function App() {
                   </select>
                   <input
                     type="text"
-                    placeholder="Opis szablonu"
+                    placeholder={t('Opis szablonu')}
                     className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                     value={formData.info}
                     onChange={handleInfoChange}
@@ -3210,14 +3183,14 @@ export default function App() {
                   <input
                     type="number"
                     step="0.01"
-                    placeholder="Kwota"
+                    placeholder={t('Kwota')}
                     className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                     value={formData.amount}
                     onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
                   />
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div className="space-y-2">
-                      <label className="block text-sm font-medium text-gray-200">Grupa</label>
+                      <label className="block text-sm font-medium text-gray-200">{t('Grupa')}</label>
                       <select
                         className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                         value={formData.transactionGroupId}
@@ -3229,7 +3202,7 @@ export default function App() {
                           }))
                         }
                       >
-                        <option value="">Bez grupy</option>
+                        <option value="">{t('Bez grupy')}</option>
                         {transactionGroups
                           .filter((group) => group.isActive)
                           .map((group) => (
@@ -3240,7 +3213,7 @@ export default function App() {
                       </select>
                     </div>
                     <div className="space-y-2">
-                      <label className="block text-sm font-medium text-gray-200">Podgrupa</label>
+                      <label className="block text-sm font-medium text-gray-200">{t('Podgrupa')}</label>
                       <select
                         className="w-full rounded border border-gray-700 bg-gray-800 p-2 disabled:cursor-not-allowed disabled:opacity-50"
                         value={formData.transactionSubgroupId}
@@ -3294,9 +3267,9 @@ export default function App() {
                         setFormData({ ...formData, frequencyPeriod: e.target.value as 'day' | 'month' | 'year' })
                       }
                     >
-                      <option value="day">Dni</option>
-                      <option value="month">Miesięcy</option>
-                      <option value="year">Lat</option>
+                      <option value="day">{t('Dni')}</option>
+                      <option value="month">{t('Miesięcy')}</option>
+                      <option value="year">{t('Lat')}</option>
                     </select>
                   </div>
                   {formData.frequencyPeriod === 'month' && (
@@ -3304,7 +3277,7 @@ export default function App() {
                       type="number"
                       min="1"
                       max="31"
-                      placeholder="Dzień miesiąca"
+                      placeholder={t('Dzień miesiąca')}
                       className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                       value={formData.dayOfMonth}
                       onChange={(e) => setFormData({ ...formData, dayOfMonth: e.target.value })}
@@ -3317,7 +3290,7 @@ export default function App() {
                 <>
                   <input
                     type="text"
-                    placeholder="Nazwa konta"
+                    placeholder={t('Nazwa konta')}
                     className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                     value={formData.accountName}
                     onChange={(e) => setFormData({ ...formData, accountName: e.target.value })}
@@ -3338,7 +3311,7 @@ export default function App() {
                       }))
                     }
                   >
-                    <option value="">Wybierz typ konta</option>
+                    <option value="">{t('Wybierz typ konta')}</option>
                     {accountTypeOptions.map((type) => (
                       <option key={type.id} value={type.id}>
                         {type.name}
@@ -3348,7 +3321,7 @@ export default function App() {
                   <input
                     type="number"
                     step="0.01"
-                    placeholder="Saldo początkowe"
+                    placeholder={t('Saldo początkowe')}
                     className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                     value={formData.initialBalance}
                     onChange={(e) => setFormData({ ...formData, initialBalance: e.target.value })}
@@ -3366,7 +3339,7 @@ export default function App() {
                       <input
                         type="number"
                         step="0.01"
-                        placeholder="Limit karty kredytowej"
+                        placeholder={t('Limit karty kredytowej')}
                         className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                         value={formData.creditLimit}
                         onChange={(e) => setFormData({ ...formData, creditLimit: e.target.value })}
@@ -3402,7 +3375,7 @@ export default function App() {
                     type="number"
                     min="0"
                     max="31"
-                    placeholder="Dzień spłaty"
+                    placeholder={t('Dzień spłaty')}
                     className="w-full rounded border border-gray-700 bg-gray-800 p-2 disabled:cursor-not-allowed disabled:opacity-50"
                     value={formData.autoRepaymentOffsetDays}
                     disabled={!formData.autoRepaymentEnabled}
