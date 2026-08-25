@@ -1,6 +1,6 @@
 services:
   db:
-    image: mariadb:latestmv 
+    image: mariadb:latest
     container_name: projection_db
     restart: unless-stopped
     environment:
