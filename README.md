@@ -4,6 +4,24 @@ Web application for managing personal finances and projecting account balances. 
 
 > The project is under active development. Before exposing an instance publicly, review the security notes and replace all example credentials.
 
+### Dashboard
+
+![Financial projection dashboard](docs/images/main_screen_en.png)
+
+### Account details
+
+![Financial projection dashboard](docs/images/details.png)
+
+### Analytics
+
+![Expense analytics 1/2](docs/images/analytics_1_pl.png)
+![Expense analytics 2/2](docs/images/analytics_1_pl.png)
+
+### User settings
+
+![User settings](docs/images/user_-_settings.png)
+
+
 ## Table of contents
 
 - [Features](#features)
