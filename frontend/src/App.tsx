@@ -82,6 +82,7 @@ export default function App() {
   });
   
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
+  const createMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const restoreSession = async () => {
@@ -373,6 +374,7 @@ export default function App() {
 
       if (
         viewMenuRef.current?.contains(target) ||
+        createMenuRef.current?.contains(target) ||
         target.closest('[data-filter-menu]') ||
         target.closest('[data-filter-button]')
       ) {
@@ -380,6 +382,7 @@ export default function App() {
       }
 
       setIsViewMenuOpen(false);
+      setIsCreateMenuOpen(false);
       setOpenFilterMenu(null);
     };
 
@@ -1840,9 +1843,8 @@ export default function App() {
           </div>
 
           <div
+            ref={createMenuRef}
             className="relative flex w-full items-stretch self-stretch md:w-auto md:self-end"
-            onMouseEnter={() => setIsCreateMenuOpen(true)}
-            onMouseLeave={() => setIsCreateMenuOpen(false)}
           >
             <button
               type="button"
@@ -1853,14 +1855,17 @@ export default function App() {
             </button>
             <button
               type="button"
+              onClick={() => setIsCreateMenuOpen((previous) => !previous)}
               className="rounded-r border-l border-blue-400/40 bg-blue-600 px-3 py-2 hover:bg-blue-500"
               aria-label="Pokaż dodatkowe opcje"
+              aria-expanded={isCreateMenuOpen}
+              aria-haspopup="menu"
             >
               ▾
             </button>
 
             {isCreateMenuOpen && (
-              <div className="absolute right-0 top-full z-20 mt-2 w-48 rounded-lg border border-gray-700 bg-gray-900 shadow-lg">
+              <div role="menu" className="absolute right-0 top-full z-20 mt-2 w-48 rounded-lg border border-gray-700 bg-gray-900 shadow-lg">
                 <button
                   type="button"
                   onClick={() => openCreateModal('transfer')}
