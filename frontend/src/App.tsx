@@ -44,6 +44,7 @@ export default function App() {
   const [successMessage, setSuccessMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingTransactionId, setEditingTransactionId] = useState<number | null>(null);
+  const [editingFromAnalytics, setEditingFromAnalytics] = useState(false);
   const [editingTemplateId, setEditingTemplateId] = useState<number | null>(null);
   const [editingAccountId, setEditingAccountId] = useState<number | null>(null);
   const [dailyBudgetInput, setDailyBudgetInput] = useState('130');
@@ -54,6 +55,8 @@ export default function App() {
   const [selectedSalaryBalanceAccountIds, setSelectedSalaryBalanceAccountIds] = useState<number[]>([]);
   const [projectionStart, setProjectionStart] = useState('');
   const [projectionEnd, setProjectionEnd] = useState('');
+  const [analyticsStart, setAnalyticsStart] = useState('');
+  const [analyticsEnd, setAnalyticsEnd] = useState('');
   const [isDefaultRangeReady, setIsDefaultRangeReady] = useState(false);
   const [transactionGroups, setTransactionGroups] = useState<TransactionGroup[]>([]);
   const [categoryGroups, setCategoryGroups] = useState<TransactionGroup[]>([]);
@@ -65,8 +68,13 @@ export default function App() {
   const [editingSubgroupId, setEditingSubgroupId] = useState<number | null>(null);
   const [isCategoryCodeDirty, setIsCategoryCodeDirty] = useState(false);
   const [transactions, setTransactions] = useState<TransactionListItem[]>([]);
+  const [analyticsSourceTransactions, setAnalyticsSourceTransactions] = useState<TransactionListItem[]>([]);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [selectedAnalyticsGroup, setSelectedAnalyticsGroup] = useState<string | null>(null);
+  const [selectedAnalyticsSubgroup, setSelectedAnalyticsSubgroup] = useState<string | null>(null);
+  const [analyticsBreakdownMode, setAnalyticsBreakdownMode] = useState<'group' | 'account'>('group');
+  const [selectedAnalyticsAccount, setSelectedAnalyticsAccount] = useState<string | null>(null);
+  const [pendingAnalyticsCategories, setPendingAnalyticsCategories] = useState<Record<number, { groupId: number | null; subgroupId: number | null }>>({});
   const [operationDisplayMode, setOperationDisplayMode] = useState<'window' | 'full-range'>('window');
   const [openFilterMenu, setOpenFilterMenu] = useState<null | 'date' | 'account' | 'info' | 'cleared'>(null);
   const [transactionFilters, setTransactionFilters] = useState<{
@@ -139,6 +147,8 @@ export default function App() {
       setAccounts(accData);
       setTransactionGroups(groupsData);
       setTransactions(transactionsData);
+      setAnalyticsSourceTransactions(transactionsData);
+      setPendingAnalyticsCategories({});
 	  
       const defaultIncludedAccountIds = accData
         .filter((account) => {
@@ -182,7 +192,8 @@ export default function App() {
   };
 
   const isDateInRange = (date: string, start: string, end: string) => {
-    return date >= start && date <= end;
+    const normalizedDate = date.slice(0, 10);
+    return normalizedDate >= start && normalizedDate <= end;
   };
 
   const fetchCategoryAdminData = async (includeInactive = showInactiveCategories) => {
@@ -206,6 +217,23 @@ export default function App() {
     setTransactions(data);
   };
 
+  const refreshAnalytics = async () => {
+    setAnalyticsLoading(true);
+    setErrorMessage('');
+    try {
+      const response = await fetch('/api/transactions');
+      if (!response.ok) throw new Error(await getErrorText(response));
+      const data: TransactionListItem[] = await response.json();
+      setTransactions(data);
+      setAnalyticsSourceTransactions(data);
+      setPendingAnalyticsCategories({});
+    } catch (error: any) {
+      setErrorMessage(error?.message ?? t('Nie udało się odświeżyć analityki.'));
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  };
+
   useEffect(() => {
     const loadDefaultRange = async () => {
       try {
@@ -216,12 +244,16 @@ export default function App() {
         const data: ProjectionDefaultRangeResponse = await res.json();
         setProjectionStart(data.projectionStart);
         setProjectionEnd(data.projectionEnd);
+        setAnalyticsStart(data.projectionStart);
+        setAnalyticsEnd(data.projectionEnd);
         setIsDefaultRangeReady(true);
       } catch (err: any) {
         console.error(err);
         setErrorMessage(err?.message ?? 'Nie udało się pobrać domyślnego zakresu projekcji.');
         setProjectionStart(monthStart);
         setProjectionEnd(monthEnd);
+        setAnalyticsStart(monthStart);
+        setAnalyticsEnd(monthEnd);
         setIsDefaultRangeReady(true);
       }
     };
@@ -703,7 +735,20 @@ export default function App() {
 
   const formatDisplayDate = (dateStr: string | null) => {
     if (!dateStr) return '—';
-    return new Intl.DateTimeFormat(locale).format(new Date(`${dateStr}T00:00:00`));
+    const normalizedDate = dateStr.slice(0, 10);
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalizedDate);
+    if (!match) return dateStr;
+    const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    return Number.isNaN(date.getTime()) ? dateStr : new Intl.DateTimeFormat(locale).format(date);
+  };
+
+  const formatDisplayMonth = (monthStr: string) => {
+    const match = /^(\d{4})-(\d{2})$/.exec(monthStr);
+    if (!match) return monthStr;
+    const date = new Date(Number(match[1]), Number(match[2]) - 1, 1);
+    return Number.isNaN(date.getTime())
+      ? monthStr
+      : new Intl.DateTimeFormat(locale, { month: 'long', year: 'numeric' }).format(date);
   };
 
   const formatDaysLabel = (days: number) => {
@@ -716,8 +761,9 @@ export default function App() {
   };
 
   const analyticsTransactions = useMemo(() => {
-    return transactions.filter((tx) => isDateInRange(tx.date, projectionStart, projectionEnd));
-  }, [transactions, projectionStart, projectionEnd]);
+    if (!analyticsStart || !analyticsEnd || analyticsStart > analyticsEnd) return [];
+    return analyticsSourceTransactions.filter((tx) => isDateInRange(tx.date, analyticsStart, analyticsEnd));
+  }, [analyticsSourceTransactions, analyticsStart, analyticsEnd]);
   
   const slugifyCategoryCode = (value: string) => {
     return value
@@ -738,14 +784,14 @@ export default function App() {
       const expense = Number(tx.expense || 0);
       if (expense <= 0 || tx.type === 'transfer') continue;
 
-      const key = tx.transactionGroupName || 'Bez grupy';
+      const key = tx.transactionGroupName || t('Bez grupy');
       map.set(key, (map.get(key) || 0) + expense);
     }
 
     return Array.from(map.entries())
       .map(([name, amount]) => ({ name, amount }))
       .sort((a, b) => b.amount - a.amount);
-  }, [analyticsTransactions]);
+  }, [analyticsTransactions, language]);
 
   const expensesBySubgroup = useMemo(() => {
     const map = new Map<string, number>();
@@ -754,8 +800,8 @@ export default function App() {
       const expense = Number(tx.expense || 0);
       if (expense <= 0 || tx.type === 'transfer') continue;
 
-      const group = tx.transactionGroupName || 'Bez grupy';
-      const subgroup = tx.transactionSubgroupName || 'Bez podgrupy';
+      const group = tx.transactionGroupName || t('Bez grupy');
+      const subgroup = tx.transactionSubgroupName || t('Bez podgrupy');
       const key = `${group} / ${subgroup}`;
 
       map.set(key, (map.get(key) || 0) + expense);
@@ -765,10 +811,18 @@ export default function App() {
       .map(([name, amount]) => ({ name, amount }))
       .sort((a, b) => b.amount - a.amount)
       .slice(0, 15);
-  }, [analyticsTransactions]);
+  }, [analyticsTransactions, language]);
+
+  const analyticsAccountName = (accountId: number) => {
+    const account = accounts.find((candidate) => candidate.id === accountId);
+    if (!account) return `${t('Konto')} #${accountId}`;
+    const hasDuplicateName = accounts.some(
+      (candidate) => candidate.id !== account.id && candidate.name === account.name,
+    );
+    return hasDuplicateName ? `${account.name} (#${account.id})` : account.name;
+  };
 
   const expensesByAccount = useMemo(() => {
-    const accountNameMap = new Map(accounts.map((account) => [account.id, account.name]));
     const map = new Map<string, number>();
 
     for (const tx of analyticsTransactions) {
@@ -776,14 +830,14 @@ export default function App() {
       if (expense <= 0 || tx.type === 'transfer') continue;
       if (!tx.accountId) continue;
 
-      const accountName = accountNameMap.get(tx.accountId) || `Konto #${tx.accountId}`;
+      const accountName = analyticsAccountName(tx.accountId);
       map.set(accountName, (map.get(accountName) || 0) + expense);
     }
 
     return Array.from(map.entries())
       .map(([name, amount]) => ({ name, amount }))
       .sort((a, b) => b.amount - a.amount);
-  }, [analyticsTransactions, accounts]);
+  }, [analyticsTransactions, accounts, language]);
 
   const monthlyFlow = useMemo(() => {
     const map = new Map<string, { income: number; expense: number }>();
@@ -874,16 +928,16 @@ export default function App() {
   for (const tx of analyticsTransactions) {
     const expense = Number(tx.expense ?? 0);
     if (expense <= 0 || tx.type === 'transfer') continue;
-    if ((tx.transactionGroupName ?? 'Bez grupy') !== selectedAnalyticsGroup) continue;
+    if ((tx.transactionGroupName ?? t('Bez grupy')) !== selectedAnalyticsGroup) continue;
 
-    const key = tx.transactionSubgroupName ?? 'Bez podgrupy';
+    const key = tx.transactionSubgroupName ?? t('Bez podgrupy');
     map.set(key, (map.get(key) ?? 0) + expense);
   }
 
   return Array.from(map.entries())
     .map(([name, amount]) => ({ name, amount }))
     .sort((a, b) => b.amount - a.amount);
-}, [analyticsTransactions, selectedAnalyticsGroup]);
+}, [analyticsTransactions, selectedAnalyticsGroup, language]);
 
   useEffect(() => {
     if (!selectedAnalyticsGroup) return;
@@ -896,16 +950,100 @@ export default function App() {
       setSelectedAnalyticsGroup(null);
     }
   }, [expensesByGroup, selectedAnalyticsGroup]);
+
+  useEffect(() => {
+    if (!selectedAnalyticsSubgroup) return;
+    if (!expensesBySelectedGroupSubgroup.some((item) => item.name === selectedAnalyticsSubgroup)) {
+      setSelectedAnalyticsSubgroup(null);
+    }
+  }, [expensesBySelectedGroupSubgroup, selectedAnalyticsSubgroup]);
+
+  useEffect(() => {
+    if (!selectedAnalyticsAccount) return;
+    if (!expensesByAccount.some((item) => item.name === selectedAnalyticsAccount)) {
+      setSelectedAnalyticsAccount(null);
+    }
+  }, [expensesByAccount, selectedAnalyticsAccount]);
   
   const totalGroupExpenses = useMemo(
     () => expensesByGroup.reduce((sum, item) => sum + item.amount, 0),
     [expensesByGroup]
   );
 
+  const totalAccountExpenses = useMemo(
+    () => expensesByAccount.reduce((sum, item) => sum + item.amount, 0),
+    [expensesByAccount]
+  );
+
   const totalSelectedGroupExpenses = useMemo(
     () => expensesBySelectedGroupSubgroup.reduce((sum, item) => sum + item.amount, 0),
     [expensesBySelectedGroupSubgroup]
   );
+
+  const selectedSubgroupTransactions = useMemo(() => {
+    if (!selectedAnalyticsGroup || !selectedAnalyticsSubgroup) return [];
+    return analyticsTransactions.filter((transaction) => {
+      if (transaction.type === 'transfer' || Number(transaction.expense || 0) <= 0) return false;
+      const groupName = transaction.transactionGroupName ?? t('Bez grupy');
+      const subgroupName = transaction.transactionSubgroupName ?? t('Bez podgrupy');
+      return groupName === selectedAnalyticsGroup && subgroupName === selectedAnalyticsSubgroup;
+    });
+  }, [analyticsTransactions, selectedAnalyticsGroup, selectedAnalyticsSubgroup, language]);
+
+  const selectedAccountTransactions = useMemo(() => {
+    if (!selectedAnalyticsAccount) return [];
+    return analyticsTransactions.filter((transaction) => {
+      if (transaction.type === 'transfer' || Number(transaction.expense || 0) <= 0 || !transaction.accountId) return false;
+      const accountName = analyticsAccountName(transaction.accountId);
+      return accountName === selectedAnalyticsAccount;
+    });
+  }, [analyticsTransactions, accounts, selectedAnalyticsAccount, language]);
+
+  const selectedDetailTransactions = analyticsBreakdownMode === 'account'
+    ? selectedAccountTransactions
+    : selectedSubgroupTransactions;
+
+  const updateAnalyticsCategory = async (
+    transaction: TransactionListItem,
+    groupId: number | null,
+    subgroupId: number | null,
+  ) => {
+    const previous = pendingAnalyticsCategories[transaction.id];
+    setPendingAnalyticsCategories((current) => ({
+      ...current,
+      [transaction.id]: { groupId, subgroupId },
+    }));
+    setErrorMessage('');
+
+    try {
+      const response = await fetch(`/api/transactions/${transaction.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: transaction.date.slice(0, 10),
+          accountId: transaction.accountId ?? undefined,
+          sourceAccountId: transaction.sourceAccountId ?? undefined,
+          destinationAccountId: transaction.destinationAccountId ?? undefined,
+          info: transaction.info,
+          income: Number(transaction.income || 0),
+          expense: Number(transaction.expense || 0),
+          type: transaction.type,
+          isSalaryIncome: transaction.isSalaryIncome,
+          transactionGroupId: groupId,
+          transactionSubgroupId: subgroupId,
+        }),
+      });
+      if (!response.ok) throw new Error(await getErrorText(response));
+    } catch (error: any) {
+      setPendingAnalyticsCategories((current) => {
+        const next = { ...current };
+        if (previous) next[transaction.id] = previous;
+        else delete next[transaction.id];
+        return next;
+      });
+      setErrorMessage(error?.message ?? t('Nie udało się zmienić kategorii.'));
+    }
+  };
 
   const openCreateModal = (tab: ActiveTab) => {
     setActiveTab(tab);
@@ -915,6 +1053,7 @@ export default function App() {
       startDate: formatLocalDate(new Date()),
     });
     setEditingTransactionId(null);
+    setEditingFromAnalytics(false);
     setEditingTemplateId(null);
     setEditingAccountId(null);
     setErrorMessage('');
@@ -931,6 +1070,7 @@ export default function App() {
     setIsModalOpen(false);
     setFormData(initialFormData);
     setEditingTransactionId(null);
+    setEditingFromAnalytics(false);
     setEditingTemplateId(null);
     setEditingAccountId(null);
   };
@@ -1183,6 +1323,12 @@ export default function App() {
       info: formData.info.trim(),
       expense: Number(formData.amount),
       type: 'transfer',
+      transactionGroupId: formData.transactionGroupId
+        ? Number(formData.transactionGroupId)
+        : null,
+      transactionSubgroupId: formData.transactionSubgroupId
+        ? Number(formData.transactionSubgroupId)
+        : null,
     };
 
     const method = editingTransactionId ? 'PATCH' : 'POST';
@@ -1287,7 +1433,17 @@ export default function App() {
       if (activeTab === 'recurring') await submitRecurring();
       if (activeTab === 'account') await submitAccount();
 
-      await fetchData();
+      if (editingFromAnalytics && editingTransactionId) {
+        setPendingAnalyticsCategories((current) => ({
+          ...current,
+          [editingTransactionId]: {
+            groupId: formData.transactionGroupId ? Number(formData.transactionGroupId) : null,
+            subgroupId: formData.transactionSubgroupId ? Number(formData.transactionSubgroupId) : null,
+          },
+        }));
+      } else {
+        await fetchData();
+      }
       setSuccessMessage('Zapisano pomyślnie.');
       closeModal();
     } catch (err: any) {
@@ -1341,6 +1497,7 @@ export default function App() {
   };
 
   const startEditRow = (row: ProjectionRow) => {
+    setEditingFromAnalytics(false);
     if (row.type === 'transfer') {
       const partnerRow = timeline
         .flatMap((day) => day.rows)
@@ -1377,6 +1534,30 @@ export default function App() {
       transactionSubgroupId: row.transactionSubgroupId ? String(row.transactionSubgroupId) : '',
     });
     setEditingTransactionId(row.transactionId);
+    setEditingTemplateId(null);
+    setEditingAccountId(null);
+    setIsModalOpen(true);
+  };
+
+  const startEditAnalyticsTransaction = (transaction: TransactionListItem) => {
+    const pendingCategory = pendingAnalyticsCategories[transaction.id];
+    setActiveTab(transaction.type === 'transfer' ? 'transfer' : 'transaction');
+    setFormData({
+      ...initialFormData,
+      date: transaction.date.slice(0, 10),
+      accountId: transaction.accountId ? String(transaction.accountId) : '',
+      sourceAccountId: transaction.sourceAccountId ? String(transaction.sourceAccountId) : '',
+      destinationAccountId: transaction.destinationAccountId ? String(transaction.destinationAccountId) : '',
+      info: transaction.info,
+      income: transaction.income ? String(transaction.income) : '',
+      expense: transaction.expense ? String(transaction.expense) : '',
+      amount: transaction.expense ? String(transaction.expense) : '',
+      isSalaryIncome: transaction.isSalaryIncome,
+      transactionGroupId: String((pendingCategory ? pendingCategory.groupId : transaction.transactionGroupId) ?? ''),
+      transactionSubgroupId: String((pendingCategory ? pendingCategory.subgroupId : transaction.transactionSubgroupId) ?? ''),
+    });
+    setEditingTransactionId(transaction.id);
+    setEditingFromAnalytics(true);
     setEditingTemplateId(null);
     setEditingAccountId(null);
     setIsModalOpen(true);
@@ -1506,71 +1687,47 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-950 pt-[env(safe-area-inset-top)] text-gray-100">
       <div className="mx-auto max-w-7xl space-y-5 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:space-y-6 sm:p-6">
-        <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold">{t('Projekcja finansowa')}</h1>
-            <p className="mt-1 text-gray-400">
-              Konta, transakcje, przelewy, płatności cykliczne i projekcja salda.
-            </p>
+        <header className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_auto_1fr] md:items-start">
+          <div className="flex flex-col gap-2 md:justify-self-start">
+            <div className="text-xs text-gray-400">
+              {t(viewMode === 'analytics' ? 'Zakres analizy' : 'Zakres projekcji')}
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              {viewMode === 'analytics' ? (
+                <>
+                  <input aria-label={t('Data początkowa analizy')} type="date" className="rounded border border-gray-700 bg-gray-800 px-3 py-2" value={analyticsStart} max={analyticsEnd || undefined} onChange={(event) => setAnalyticsStart(event.target.value)} />
+                  <input aria-label={t('Data końcowa analizy')} type="date" className="rounded border border-gray-700 bg-gray-800 px-3 py-2" value={analyticsEnd} min={analyticsStart || undefined} onChange={(event) => setAnalyticsEnd(event.target.value)} />
+                  <button type="button" disabled={analyticsLoading} onClick={refreshAnalytics} className="rounded bg-blue-600 px-4 py-2 hover:bg-blue-500 disabled:opacity-60">{analyticsLoading ? t('Odświeżanie…') : t('Odśwież')}</button>
+                </>
+              ) : (
+                <>
+                  <input aria-label={t('Data początkowa projekcji')} type="date" className="rounded border border-gray-700 bg-gray-800 px-3 py-2" value={projectionStart} onChange={(event) => setProjectionStart(event.target.value)} />
+                  <input aria-label={t('Data końcowa projekcji')} type="date" className="rounded border border-gray-700 bg-gray-800 px-3 py-2" value={projectionEnd} onChange={(event) => setProjectionEnd(event.target.value)} />
+                  <button onClick={fetchData} className="rounded bg-blue-600 px-4 py-2 hover:bg-blue-500" type="button">{t('Odśwież')}</button>
+                </>
+              )}
+            </div>
+            {viewMode !== 'analytics' && (
+              <button
+                type="button"
+                aria-pressed={operationDisplayMode === 'window'}
+                onClick={() => setOperationDisplayMode((current) => current === 'window' ? 'full-range' : 'window')}
+                className="w-fit rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 hover:bg-gray-700"
+              >
+                {t(operationDisplayMode === 'window' ? 'Widok skrócony' : 'Pełen zakres')}
+              </button>
+            )}
+            {viewMode === 'analytics' && analyticsStart && analyticsEnd && analyticsStart > analyticsEnd && (
+              <div className="text-sm text-red-300">{t('Data początkowa nie może być późniejsza niż data końcowa.')}</div>
+            )}
           </div>
 
-          <div className="flex flex-col gap-3 md:items-end">
-            <div className="flex flex-wrap items-center justify-end gap-2 text-sm text-gray-300">
-              <UserMenu user={authUser} onUserUpdated={setAuthUser} onLogout={logout} />
-            </div>
-            <div className="flex gap-3 md:flex-row">
-            <div className="flex gap-2">
-              <input
-                type="date"
-                className="rounded border border-gray-700 bg-gray-800 px-3 py-2"
-                value={projectionStart}
-                onChange={(e) => setProjectionStart(e.target.value)}
-              />
-              <input
-                type="date"
-                className="rounded border border-gray-700 bg-gray-800 px-3 py-2"
-                value={projectionEnd}
-                onChange={(e) => setProjectionEnd(e.target.value)}
-              />
-            </div>
-            <button
-              onClick={() => {
-                setOperationDisplayMode('full-range');
-                fetchData();
-              }}
-              className="rounded bg-blue-600 px-4 py-2 hover:bg-blue-500"
-              type="button"
-            >
-              Odśwież
-            </button>
-            </div>
+          <h1 className="text-3xl font-bold md:justify-self-center">{t('Projekcja finansowa')}</h1>
+
+          <div className="flex text-sm text-gray-300 md:justify-self-end">
+            <UserMenu user={authUser} onUserUpdated={setAuthUser} onLogout={logout} />
           </div>
         </header>
-		
-		<div className="flex flex-wrap gap-2">
-		  <button
-    		type="button"
-    		onClick={() => setOperationDisplayMode('window')}
-    		className={`rounded px-3 py-2 ${
-      		operationDisplayMode === 'window'
-        		? 'bg-blue-600 text-white'
-        		: 'border border-gray-700 bg-gray-800 text-gray-200 hover:bg-gray-700'
-    		}`}
-  		>
-    		Widok skrócony
-  		</button>
-  		<button
-    		type="button"
-    		onClick={() => setOperationDisplayMode('full-range')}
-    		className={`rounded px-3 py-2 ${
-      		operationDisplayMode === 'full-range'
-        		? 'bg-blue-600 text-white'
-        		: 'border border-gray-700 bg-gray-800 text-gray-200 hover:bg-gray-700'
-    		}`}
-  		>
-    		Pełen zakres
-  		</button>
-		</div>
 
         {errorMessage && (
           <div className="rounded-lg border border-red-800 bg-red-950 px-4 py-3 text-red-300">
@@ -1584,10 +1741,102 @@ export default function App() {
           </div>
         )}
 
-        <div className="text-sm text-gray-400">
-          {operationDisplayMode === 'window'
-            ? `Widoczne operacje: ostatnie ${PAST_DAYS_VISIBLE} dni i najbliższe ${FUTURE_DAYS_VISIBLE} dni.`
-            : `Widoczne operacje z pełnego zakresu projekcji: ${projectionStart} -> ${projectionEnd}.`}
+        <div className="sticky top-[env(safe-area-inset-top)] z-40 -mx-4 flex flex-col gap-3 border-y border-gray-800 bg-gray-950/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:flex-row md:items-center md:justify-between">
+          <div className="flex min-w-0 flex-wrap gap-2">
+            <div className="rounded border border-gray-700 bg-gray-900 px-3 py-2">
+              <div className="text-xs text-gray-400">{t('Saldo bieżące')}</div>
+              <div className="whitespace-nowrap font-semibold">
+                {formatCurrency(currentTotalBalance ?? 0, 'PLN')}
+              </div>
+            </div>
+            <div className="rounded border border-gray-700 bg-gray-900 px-3 py-2">
+              <div className="text-xs text-gray-400">
+                {t('Prognoza na wypłatę')}{nextSalaryDate ? ` (${formatDisplayDate(nextSalaryDate)})` : ''}
+              </div>
+              <div className="whitespace-nowrap font-semibold">
+                {formatCurrency(salaryTotalBalance, 'PLN')}
+              </div>
+            </div>
+          </div>
+
+          <div className="relative w-full md:w-auto" ref={viewMenuRef}>
+            <button
+              type="button"
+              onClick={() => setIsViewMenuOpen((prev) => !prev)}
+              className="w-full rounded border border-gray-700 bg-gray-800 px-4 py-2 hover:bg-gray-700 md:w-auto"
+            >
+              {t('Widok')}: {t(viewModeLabels[viewMode])} ▾
+            </button>
+
+            {isViewMenuOpen && (
+              <div className="absolute z-20 mt-2 w-48 rounded-lg border border-gray-700 bg-gray-900 shadow-lg">
+                {(Object.keys(viewModeLabels) as ViewMode[]).filter((mode) => mode !== 'users' || authUser.role === 'ADMIN').map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => {
+                      setViewMode(mode);
+                      setIsViewMenuOpen(false);
+                    }}
+                    className={`block w-full px-4 py-2 text-left hover:bg-gray-800 ${
+                      viewMode === mode ? 'text-blue-400' : 'text-gray-100'
+                    }`}
+                  >
+                    {t(viewModeLabels[mode])}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div
+            ref={createMenuRef}
+            className="relative flex w-full items-stretch self-stretch md:w-auto md:self-end"
+          >
+            <button
+              type="button"
+              onClick={openDefaultOperationModal}
+              className="flex-1 rounded-l bg-blue-600 px-4 py-2 hover:bg-blue-500 md:flex-none"
+            >
+              {t('Nowa operacja')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsCreateMenuOpen((previous) => !previous)}
+              className="rounded-r border-l border-blue-400/40 bg-blue-600 px-3 py-2 hover:bg-blue-500"
+              aria-label={t('Pokaż dodatkowe opcje')}
+              aria-expanded={isCreateMenuOpen}
+              aria-haspopup="menu"
+            >
+              ▾
+            </button>
+
+            {isCreateMenuOpen && (
+              <div role="menu" className="absolute right-0 top-full z-20 mt-2 w-48 rounded-lg border border-gray-700 bg-gray-900 shadow-lg">
+                <button
+                  type="button"
+                  onClick={() => openCreateModal('transfer')}
+                  className="block w-full px-4 py-2 text-left hover:bg-gray-800"
+                >
+                  {t('Przelew')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openCreateModal('recurring')}
+                  className="block w-full px-4 py-2 text-left hover:bg-gray-800"
+                >
+                  {t('Cykliczne')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openCreateModal('account')}
+                  className="block w-full px-4 py-2 text-left hover:bg-gray-800"
+                >
+                  {t('Konto')}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -1765,125 +2014,31 @@ export default function App() {
           </div>
         </div>
 
-        <div className="sticky top-[env(safe-area-inset-top)] z-40 -mx-4 flex flex-col gap-3 border-y border-gray-800 bg-gray-950/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:flex-row md:items-center md:justify-between">
-          {viewMode === 'transactions' && (
-            <div className="flex min-w-0 flex-wrap gap-2">
-              <div className="rounded border border-gray-700 bg-gray-900 px-3 py-2">
-                <div className="text-xs text-gray-400">{t('Saldo bieżące')}</div>
-                <div className="whitespace-nowrap font-semibold">
-                  {formatCurrency(currentTotalBalance ?? 0, 'PLN')}
-                </div>
-              </div>
-              <div className="rounded border border-gray-700 bg-gray-900 px-3 py-2">
-                <div className="text-xs text-gray-400">
-                  Prognoza na wypłatę{nextSalaryDate ? ` (${formatDisplayDate(nextSalaryDate)})` : ''}
-                </div>
-                <div className="whitespace-nowrap font-semibold">
-                  {formatCurrency(salaryTotalBalance, 'PLN')}
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="relative w-full md:w-auto" ref={viewMenuRef}>
-            <button
-              type="button"
-              onClick={() => setIsViewMenuOpen((prev) => !prev)}
-              className="w-full rounded border border-gray-700 bg-gray-800 px-4 py-2 hover:bg-gray-700 md:w-auto"
-            >
-              {t('Widok')}: {t(viewModeLabels[viewMode])} ▾
-            </button>
-
-            {isViewMenuOpen && (
-              <div className="absolute z-20 mt-2 w-48 rounded-lg border border-gray-700 bg-gray-900 shadow-lg">
-                {(Object.keys(viewModeLabels) as ViewMode[]).filter((mode) => mode !== 'users' || authUser.role === 'ADMIN').map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => {
-                      setViewMode(mode);
-                      setIsViewMenuOpen(false);
-                    }}
-                    className={`block w-full px-4 py-2 text-left hover:bg-gray-800 ${
-                      viewMode === mode ? 'text-blue-400' : 'text-gray-100'
-                    }`}
-                  >
-                    {t(viewModeLabels[mode])}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div
-            ref={createMenuRef}
-            className="relative flex w-full items-stretch self-stretch md:w-auto md:self-end"
-          >
-            <button
-              type="button"
-              onClick={openDefaultOperationModal}
-              className="flex-1 rounded-l bg-blue-600 px-4 py-2 hover:bg-blue-500 md:flex-none"
-            >
-              {t('Nowa operacja')}
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsCreateMenuOpen((previous) => !previous)}
-              className="rounded-r border-l border-blue-400/40 bg-blue-600 px-3 py-2 hover:bg-blue-500"
-              aria-label={t('Pokaż dodatkowe opcje')}
-              aria-expanded={isCreateMenuOpen}
-              aria-haspopup="menu"
-            >
-              ▾
-            </button>
-
-            {isCreateMenuOpen && (
-              <div role="menu" className="absolute right-0 top-full z-20 mt-2 w-48 rounded-lg border border-gray-700 bg-gray-900 shadow-lg">
-                <button
-                  type="button"
-                  onClick={() => openCreateModal('transfer')}
-                  className="block w-full px-4 py-2 text-left hover:bg-gray-800"
-                >
-                  {t('Przelew')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => openCreateModal('recurring')}
-                  className="block w-full px-4 py-2 text-left hover:bg-gray-800"
-                >
-                  {t('Cykliczne')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => openCreateModal('account')}
-                  className="block w-full px-4 py-2 text-left hover:bg-gray-800"
-                >
-                  {t('Konto')}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+        {viewMode !== 'analytics' && <div className="text-sm text-gray-400">
+          {operationDisplayMode === 'window'
+            ? `Widoczne operacje: ostatnie ${PAST_DAYS_VISIBLE} dni i najbliższe ${FUTURE_DAYS_VISIBLE} dni.`
+            : `Widoczne operacje z pełnego zakresu projekcji: ${projectionStart} -> ${projectionEnd}.`}
+        </div>}
 
           {viewMode === 'analytics' && (
             <div className="space-y-6">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
                 <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                  <div className="text-sm text-gray-400">Wpływy</div>
+                  <div className="text-sm text-gray-400">{t('Wpływy')}</div>
                   <div className="mt-2 text-2xl font-bold text-green-400">
                     {formatCurrency(analyticsSummary.totalIncome, 'PLN')}
                   </div>
                 </div>
 
                 <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                  <div className="text-sm text-gray-400">Wydatki</div>
+                  <div className="text-sm text-gray-400">{t('Wydatki')}</div>
                   <div className="mt-2 text-2xl font-bold text-red-400">
                     {formatCurrency(analyticsSummary.totalExpense, 'PLN')}
                   </div>
                 </div>
           
                 <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                  <div className="text-sm text-gray-400">Bilans</div>
+                  <div className="text-sm text-gray-400">{t('Bilans')}</div>
                   <div
                     className={`mt-2 text-2xl font-bold ${
                       analyticsSummary.balance >= 0 ? 'text-green-400' : 'text-red-400'
@@ -1894,7 +2049,7 @@ export default function App() {
                 </div>
 
                 <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                  <div className="text-sm text-gray-400">Wpływy z wypłat</div>
+                  <div className="text-sm text-gray-400">{t('Wpływy z wypłat')}</div>
                   <div className="mt-2 text-2xl font-bold text-emerald-300">
                     {formatCurrency(analyticsSummary.salaryIncome, 'PLN')}
                   </div>
@@ -1903,43 +2058,58 @@ export default function App() {
 
 
               <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <h3 className="text-lg font-semibold">Wydatki wg grup</h3>
-                  {selectedAnalyticsGroup && (
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-3">
+                    <h3 className="text-lg font-semibold">{analyticsBreakdownMode === 'group' ? t('Wydatki wg grup') : t('Wydatki wg kont')}</h3>
+                    {((analyticsBreakdownMode === 'group' && selectedAnalyticsGroup) || (analyticsBreakdownMode === 'account' && selectedAnalyticsAccount)) && (
                     <button
                       type="button"
-                      onClick={() => setSelectedAnalyticsGroup(null)}
+                      onClick={() => {
+                        setSelectedAnalyticsGroup(null);
+                        setSelectedAnalyticsSubgroup(null);
+                        setSelectedAnalyticsAccount(null);
+                      }}
                       className="rounded border border-gray-600 px-3 py-1 text-sm hover:bg-gray-700"
                     >
-                      Wyczyść wybór
+                      {t('Wyczyść wybór')}
                     </button>
-                  )}
+                    )}
+                  </div>
+                  <div className="inline-flex self-start rounded border border-gray-600 bg-gray-900 p-1">
+                    <button type="button" onClick={() => { setAnalyticsBreakdownMode('group'); setSelectedAnalyticsAccount(null); }} className={`rounded px-3 py-1.5 text-sm ${analyticsBreakdownMode === 'group' ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>{t('Grupa')}</button>
+                    <button type="button" onClick={() => { setAnalyticsBreakdownMode('account'); setSelectedAnalyticsGroup(null); setSelectedAnalyticsSubgroup(null); }} className={`rounded px-3 py-1.5 text-sm ${analyticsBreakdownMode === 'account' ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>{t('Konto')}</button>
+                  </div>
                 </div>
 
-                {expensesByGroup.length > 0 ? (
+                {(analyticsBreakdownMode === 'group' ? expensesByGroup : expensesByAccount).length > 0 ? (
                   <PieDonutChart
-                    data={expensesByGroup}
-                    total={totalGroupExpenses}
-                    selectedName={selectedAnalyticsGroup}
-                    onSelect={(name) =>
-                      setSelectedAnalyticsGroup((prev) => (prev === name ? null : name))
-                    }
+                    data={analyticsBreakdownMode === 'group' ? expensesByGroup : expensesByAccount}
+                    total={analyticsBreakdownMode === 'group' ? totalGroupExpenses : totalAccountExpenses}
+                    selectedName={analyticsBreakdownMode === 'group' ? selectedAnalyticsGroup : selectedAnalyticsAccount}
+                    onSelect={(name) => {
+                      if (analyticsBreakdownMode === 'group') {
+                        setSelectedAnalyticsGroup((previous) => (previous === name ? null : name));
+                        setSelectedAnalyticsSubgroup(null);
+                      } else {
+                        setSelectedAnalyticsAccount((previous) => (previous === name ? null : name));
+                      }
+                    }}
                   />
                 ) : (
-                  <div className="text-sm text-gray-400">Brak wydatków w wybranym zakresie.</div>
+                  <div className="text-sm text-gray-400">{t('Brak wydatków w wybranym zakresie.')}</div>
                 )}
               </section>
 
-              <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+              {analyticsBreakdownMode === 'group' && <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <h3 className="text-lg font-semibold">
                     {selectedAnalyticsGroup
-                      ? `Podgrupy: ${selectedAnalyticsGroup}`
-                      : 'Podgrupy kosztów'}
+                      ? `${t('Podgrupy')}: ${selectedAnalyticsGroup}`
+                      : t('Podgrupy kosztów')}
                   </h3>
                   {selectedAnalyticsGroup && (
                     <div className="text-sm text-gray-400">
-                      Szczegóły dla wybranej grupy
+                      {t('Szczegóły dla wybranej grupy')}
                     </div>
                   )}
                 </div>
@@ -1949,76 +2119,77 @@ export default function App() {
                     <PieDonutChart
                       data={expensesBySelectedGroupSubgroup}
                       total={totalSelectedGroupExpenses}
+                      selectedName={selectedAnalyticsSubgroup}
+                      onSelect={(name) => setSelectedAnalyticsSubgroup((previous) => previous === name ? null : name)}
                     />
                   ) : (
                     <div className="text-sm text-gray-400">
-                      Brak danych o podgrupach dla tej grupy.
+                      {t('Brak danych o podgrupach dla tej grupy.')}
                     </div>
                   )
                 ) : (
                   <div className="text-sm text-gray-400">
-                    Kliknij grupę na wykresie powyżej, aby zobaczyć rozbicie na podgrupy.
+                    {t('Kliknij grupę na wykresie powyżej, aby zobaczyć rozbicie na podgrupy.')}
                   </div>
                 )}
-              </section>
+              </section>}
 
-
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+              {((analyticsBreakdownMode === 'group' && selectedAnalyticsSubgroup) || (analyticsBreakdownMode === 'account' && selectedAnalyticsAccount)) && (
                 <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                  <h3 className="mb-4 text-lg font-semibold">Wydatki wg grup</h3>
-                  <div className="space-y-3">
-                    {expensesByGroup.length > 0 ? (
-                      expensesByGroup.slice(0, 10).map((item) => (
-                        <div key={item.name} className="space-y-1">
-                          <div className="flex items-center justify-between gap-4 text-sm">
-                            <span>{item.name}</span>
-                            <span className="font-mono">{formatCurrency(item.amount, 'PLN')}</span>
-                          </div>
-                          <AnalyticsBar
-                            value={item.amount}
-                            max={expensesByGroup[0]?.amount ?? 0}
-                            colorClass="bg-red-500"
-                          />
-                        </div>
-                      ))
-                    ) : (
-                      <div className="text-sm text-gray-400">Brak wydatków w wybranym zakresie.</div>
-                    )}
+                  <div className="mb-4">
+                    <h3 className="text-lg font-semibold">{analyticsBreakdownMode === 'group' ? `${t('Operacje w podgrupie')}: ${selectedAnalyticsSubgroup}` : `${t('Operacje na koncie')}: ${selectedAnalyticsAccount}`}</h3>
+                    <p className="mt-1 text-sm text-gray-400">{t('Zmiany kategorii zostaną uwzględnione na wykresach po odświeżeniu analityki.')}</p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[980px] text-sm">
+                      <thead><tr className="border-b border-gray-700 text-gray-400">
+                        <th className="p-2 text-left">{t('Data')}</th>
+                        <th className="p-2 text-left">{t('Konto')}</th>
+                        <th className="p-2 text-left">{t('Nazwa operacji')}</th>
+                        <th className="p-2 text-right">{t('Kwota')}</th>
+                        <th className="p-2 text-left">{t('Grupa')}</th>
+                        <th className="p-2 text-left">{t('Podgrupa')}</th>
+                      </tr></thead>
+                      <tbody>
+                        {selectedDetailTransactions.map((transaction) => {
+                          const pending = pendingAnalyticsCategories[transaction.id];
+                          const groupId = (pending ? pending.groupId : transaction.transactionGroupId) ?? null;
+                          const subgroupId = (pending ? pending.subgroupId : transaction.transactionSubgroupId) ?? null;
+                          const selectedGroup = transactionGroups.find((group) => group.id === groupId);
+                          const accountName = accounts.find((account) => account.id === transaction.accountId)?.name ?? `${t('Konto')} #${transaction.accountId ?? '—'}`;
+                          return <tr key={transaction.id} onClick={() => startEditAnalyticsTransaction(transaction)} className="cursor-pointer border-b border-gray-700/60 hover:bg-gray-700/70">
+                            <td className="whitespace-nowrap p-2">{formatDisplayDate(transaction.date)}</td>
+                            <td className="p-2">{accountName}</td>
+                            <td className="p-2">{transaction.info}</td>
+                            <td className="whitespace-nowrap p-2 text-right font-mono">{formatCurrency(Number(transaction.expense || 0), 'PLN')}</td>
+                            <td className="p-2" onClick={(event) => event.stopPropagation()}>
+                              <select value={groupId ?? ''} onChange={(event) => updateAnalyticsCategory(transaction, event.target.value ? Number(event.target.value) : null, null)} className="w-full rounded border border-gray-600 bg-gray-900 px-2 py-1.5">
+                                <option value="">{t('Bez grupy')}</option>
+                                {transactionGroups.filter((group) => group.isActive).map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                              </select>
+                            </td>
+                            <td className="p-2" onClick={(event) => event.stopPropagation()}>
+                              <select disabled={!groupId} value={subgroupId ?? ''} onChange={(event) => updateAnalyticsCategory(transaction, groupId, event.target.value ? Number(event.target.value) : null)} className="w-full rounded border border-gray-600 bg-gray-900 px-2 py-1.5 disabled:opacity-50">
+                                <option value="">{groupId ? t('Bez podgrupy') : t('Najpierw wybierz grupę')}</option>
+                                {(selectedGroup?.subgroups ?? []).filter((subgroup) => subgroup.isActive).map((subgroup) => <option key={subgroup.id} value={subgroup.id}>{subgroup.name}</option>)}
+                              </select>
+                            </td>
+                          </tr>;
+                        })}
+                        {selectedDetailTransactions.length === 0 && <tr><td colSpan={6} className="p-4 text-center text-gray-400">{analyticsBreakdownMode === 'group' ? t('Brak operacji w wybranej podgrupie.') : t('Brak operacji dla wybranego konta.')}</td></tr>}
+                      </tbody>
+                    </table>
                   </div>
                 </section>
-
-                <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                  <h3 className="mb-4 text-lg font-semibold">Wydatki wg kont</h3>
-                  <div className="space-y-3">
-                    {expensesByAccount.length > 0 ? (
-                      expensesByAccount.map((item) => (
-                        <div key={item.name} className="space-y-1">
-                          <div className="flex items-center justify-between gap-4 text-sm">
-                            <span>{item.name}</span>
-                            <span className="font-mono">{formatCurrency(item.amount, 'PLN')}</span>
-                          </div>
-                          <AnalyticsBar
-                            value={item.amount}
-                            max={expensesByAccount[0]?.amount ?? 0}
-                            colorClass="bg-amber-500"
-                          />
-                        </div>
-                      ))
-                    ) : (
-                      <div className="text-sm text-gray-400">Brak danych o wydatkach per konto.</div>
-                    )}
-                  </div>
-                </section>
-              </div>
-
+              )}
               <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                <h3 className="mb-4 text-lg font-semibold">Top podgrupy kosztów</h3>
+                <h3 className="mb-4 text-lg font-semibold">{t('Top podgrupy kosztów')}</h3>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-700 text-gray-400">
-                        <th className="p-2 text-left">Podgrupa</th>
-                        <th className="p-2 text-right">Kwota</th>
+                        <th className="p-2 text-left">{t('Podgrupa')}</th>
+                        <th className="p-2 text-right">{t('Kwota')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2032,7 +2203,7 @@ export default function App() {
                       ) : (
                         <tr>
                           <td colSpan={2} className="p-4 text-center text-gray-400">
-                            Brak danych o podgrupach.
+                            {t('Brak danych o podgrupach.')}
                           </td>
                         </tr>
                       )}
@@ -2042,22 +2213,22 @@ export default function App() {
               </section>
 
               <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                <h3 className="mb-4 text-lg font-semibold">Miesięczny przepływ</h3>
+                <h3 className="mb-4 text-lg font-semibold">{t('Miesięczny przepływ')}</h3>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-700 text-gray-400">
-                        <th className="p-2 text-left">Miesiąc</th>
-                        <th className="p-2 text-right">Wpływy</th>
-                        <th className="p-2 text-right">Wydatki</th>
-                        <th className="p-2 text-right">Bilans</th>
+                        <th className="p-2 text-left">{t('Miesiąc')}</th>
+                        <th className="p-2 text-right">{t('Wpływy')}</th>
+                        <th className="p-2 text-right">{t('Wydatki')}</th>
+                        <th className="p-2 text-right">{t('Bilans')}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {monthlyFlow.length > 0 ? (
                         monthlyFlow.map((item) => (
                           <tr key={item.month} className="border-b border-gray-700/60">
-                            <td className="p-2">{item.month}</td>
+                            <td className="p-2">{formatDisplayMonth(item.month)}</td>
                             <td className="p-2 text-right text-green-400">{formatCurrency(item.income, 'PLN')}</td>
                             <td className="p-2 text-right text-red-400">{formatCurrency(item.expense, 'PLN')}</td>
                             <td
@@ -2072,7 +2243,7 @@ export default function App() {
                       ) : (
                         <tr>
                           <td colSpan={4} className="p-4 text-center text-gray-400">
-                            Brak danych miesięcznych w wybranym zakresie.
+                            {t('Brak danych miesięcznych w wybranym zakresie.')}
                           </td>
                         </tr>
                       )}
@@ -2082,12 +2253,12 @@ export default function App() {
               </section>
 
               <section className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                <h3 className="mb-4 text-lg font-semibold">Dzienny trend wydatków</h3>
+                <h3 className="mb-4 text-lg font-semibold">{t('Dzienny trend wydatków')}</h3>
                 <div className="space-y-2">
                   {dailyExpenseTrend.length > 0 ? (
                     dailyExpenseTrend.map((item) => (
                       <div key={item.date} className="grid grid-cols-[120px_1fr_140px] items-center gap-3">
-                        <div className="text-sm text-gray-300">{item.date}</div>
+                        <div className="text-sm text-gray-300">{formatDisplayDate(item.date)}</div>
                         <AnalyticsBar
                           value={item.amount}
                           max={Math.max(...dailyExpenseTrend.map((d) => d.amount))}
@@ -2097,7 +2268,7 @@ export default function App() {
                       </div>
                     ))
                   ) : (
-                    <div className="text-sm text-gray-400">Brak dziennych wydatków w wybranym zakresie.</div>
+                    <div className="text-sm text-gray-400">{t('Brak dziennych wydatków w wybranym zakresie.')}</div>
                   )}
                 </div>
               </section>
@@ -2315,7 +2486,7 @@ export default function App() {
             )}
           </div>
         )}
-        <div className={`${viewMode === 'transactions' ? 'hidden md:block ' : ''}overflow-x-auto rounded-lg border border-gray-700 bg-gray-800`}>
+        {(viewMode === 'transactions' || viewMode === 'recurring' || viewMode === 'accounts') && <div className={`${viewMode === 'transactions' ? 'hidden md:block ' : ''}overflow-x-auto rounded-lg border border-gray-700 bg-gray-800`}>
           <table className="w-full text-center">
             <thead className="border-b border-gray-700">
               <tr>
@@ -2875,7 +3046,7 @@ export default function App() {
               )}
             </tbody>
           </table>
-        </div>
+        </div>}
         </>
         )}
       </div>
