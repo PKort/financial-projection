@@ -1687,44 +1687,44 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-950 pt-[env(safe-area-inset-top)] text-gray-100">
       <div className="mx-auto max-w-7xl space-y-5 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:space-y-6 sm:p-6">
-        <header className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_auto_1fr] md:items-start">
-          <div className="flex flex-col gap-2 md:justify-self-start">
+        <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 md:grid-cols-[1fr_auto_1fr] md:items-start md:gap-4">
+          <div className="order-2 col-span-2 flex min-w-0 flex-col gap-2 md:order-none md:col-span-1 md:justify-self-start">
             <div className="text-xs text-gray-400">
               {t(viewMode === 'analytics' ? 'Zakres analizy' : 'Zakres projekcji')}
             </div>
-            <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-[auto_auto_auto]">
               {viewMode === 'analytics' ? (
                 <>
-                  <input aria-label={t('Data początkowa analizy')} type="date" className="rounded border border-gray-700 bg-gray-800 px-3 py-2" value={analyticsStart} max={analyticsEnd || undefined} onChange={(event) => setAnalyticsStart(event.target.value)} />
-                  <input aria-label={t('Data końcowa analizy')} type="date" className="rounded border border-gray-700 bg-gray-800 px-3 py-2" value={analyticsEnd} min={analyticsStart || undefined} onChange={(event) => setAnalyticsEnd(event.target.value)} />
-                  <button type="button" disabled={analyticsLoading} onClick={refreshAnalytics} className="rounded bg-blue-600 px-4 py-2 hover:bg-blue-500 disabled:opacity-60">{analyticsLoading ? t('Odświeżanie…') : t('Odśwież')}</button>
+                  <input aria-label={t('Data początkowa analizy')} type="date" className="min-w-0 rounded border border-gray-700 bg-gray-800 px-2 py-2 text-sm sm:px-3" value={analyticsStart} max={analyticsEnd || undefined} onChange={(event) => setAnalyticsStart(event.target.value)} />
+                  <input aria-label={t('Data końcowa analizy')} type="date" className="min-w-0 rounded border border-gray-700 bg-gray-800 px-2 py-2 text-sm sm:px-3" value={analyticsEnd} min={analyticsStart || undefined} onChange={(event) => setAnalyticsEnd(event.target.value)} />
+                  <button type="button" disabled={analyticsLoading} onClick={refreshAnalytics} className="col-span-2 rounded bg-blue-600 px-3 py-2 text-sm hover:bg-blue-500 disabled:opacity-60 md:col-span-1 md:px-4">{analyticsLoading ? t('Odświeżanie…') : t('Odśwież')}</button>
                 </>
               ) : (
                 <>
-                  <input aria-label={t('Data początkowa projekcji')} type="date" className="rounded border border-gray-700 bg-gray-800 px-3 py-2" value={projectionStart} onChange={(event) => setProjectionStart(event.target.value)} />
-                  <input aria-label={t('Data końcowa projekcji')} type="date" className="rounded border border-gray-700 bg-gray-800 px-3 py-2" value={projectionEnd} onChange={(event) => setProjectionEnd(event.target.value)} />
-                  <button onClick={fetchData} className="rounded bg-blue-600 px-4 py-2 hover:bg-blue-500" type="button">{t('Odśwież')}</button>
+                  <input aria-label={t('Data początkowa projekcji')} type="date" className="min-w-0 rounded border border-gray-700 bg-gray-800 px-2 py-2 text-sm sm:px-3" value={projectionStart} onChange={(event) => setProjectionStart(event.target.value)} />
+                  <input aria-label={t('Data końcowa projekcji')} type="date" className="min-w-0 rounded border border-gray-700 bg-gray-800 px-2 py-2 text-sm sm:px-3" value={projectionEnd} onChange={(event) => setProjectionEnd(event.target.value)} />
+                  <button onClick={fetchData} className="rounded bg-blue-600 px-3 py-2 text-sm hover:bg-blue-500 md:px-4" type="button">{t('Odśwież')}</button>
                 </>
               )}
+              {viewMode !== 'analytics' && (
+                <button
+                  type="button"
+                  aria-pressed={operationDisplayMode === 'window'}
+                  onClick={() => setOperationDisplayMode((current) => current === 'window' ? 'full-range' : 'window')}
+                  className="rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 hover:bg-gray-700 md:col-span-3 md:w-fit"
+                >
+                  {t(operationDisplayMode === 'window' ? 'Widok skrócony' : 'Pełen zakres')}
+                </button>
+              )}
             </div>
-            {viewMode !== 'analytics' && (
-              <button
-                type="button"
-                aria-pressed={operationDisplayMode === 'window'}
-                onClick={() => setOperationDisplayMode((current) => current === 'window' ? 'full-range' : 'window')}
-                className="w-fit rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 hover:bg-gray-700"
-              >
-                {t(operationDisplayMode === 'window' ? 'Widok skrócony' : 'Pełen zakres')}
-              </button>
-            )}
             {viewMode === 'analytics' && analyticsStart && analyticsEnd && analyticsStart > analyticsEnd && (
               <div className="text-sm text-red-300">{t('Data początkowa nie może być późniejsza niż data końcowa.')}</div>
             )}
           </div>
 
-          <h1 className="text-3xl font-bold md:justify-self-center">{t('Projekcja finansowa')}</h1>
+          <h1 className="order-1 min-w-0 text-xl font-bold sm:text-2xl md:order-none md:justify-self-center md:text-3xl">{t('Projekcja finansowa')}</h1>
 
-          <div className="flex text-sm text-gray-300 md:justify-self-end">
+          <div className="order-1 flex min-w-0 justify-self-end text-sm text-gray-300 md:order-none md:justify-self-end">
             <UserMenu user={authUser} onUserUpdated={setAuthUser} onLogout={logout} />
           </div>
         </header>
@@ -1741,19 +1741,19 @@ export default function App() {
           </div>
         )}
 
-        <div className="sticky top-[env(safe-area-inset-top)] z-40 -mx-4 flex flex-col gap-3 border-y border-gray-800 bg-gray-950/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:flex-row md:items-center md:justify-between">
-          <div className="flex min-w-0 flex-wrap gap-2">
-            <div className="rounded border border-gray-700 bg-gray-900 px-3 py-2">
-              <div className="text-xs text-gray-400">{t('Saldo bieżące')}</div>
-              <div className="whitespace-nowrap font-semibold">
+        <div className="sticky top-[env(safe-area-inset-top)] z-40 -mx-4 grid grid-cols-2 gap-2 border-y border-gray-800 bg-gray-950/95 px-4 py-2 backdrop-blur sm:-mx-6 sm:px-6 md:flex md:items-center md:justify-between md:gap-3 md:py-3">
+          <div className="col-span-2 grid min-w-0 grid-cols-2 gap-2 md:flex md:flex-wrap">
+            <div className="min-w-0 rounded border border-gray-700 bg-gray-900 px-2 py-1.5 md:px-3 md:py-2">
+              <div className="truncate text-[11px] text-gray-400 md:text-xs">{t('Saldo bieżące')}</div>
+              <div className="truncate text-sm font-semibold md:text-base">
                 {formatCurrency(currentTotalBalance ?? 0, 'PLN')}
               </div>
             </div>
-            <div className="rounded border border-gray-700 bg-gray-900 px-3 py-2">
-              <div className="text-xs text-gray-400">
+            <div className="min-w-0 rounded border border-gray-700 bg-gray-900 px-2 py-1.5 md:px-3 md:py-2">
+              <div className="truncate text-[11px] text-gray-400 md:text-xs">
                 {t('Prognoza na wypłatę')}{nextSalaryDate ? ` (${formatDisplayDate(nextSalaryDate)})` : ''}
               </div>
-              <div className="whitespace-nowrap font-semibold">
+              <div className="truncate text-sm font-semibold md:text-base">
                 {formatCurrency(salaryTotalBalance, 'PLN')}
               </div>
             </div>
@@ -1763,7 +1763,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setIsViewMenuOpen((prev) => !prev)}
-              className="w-full rounded border border-gray-700 bg-gray-800 px-4 py-2 hover:bg-gray-700 md:w-auto"
+              className="w-full truncate rounded border border-gray-700 bg-gray-800 px-2 py-2 text-sm hover:bg-gray-700 md:w-auto md:px-4 md:text-base"
             >
               {t('Widok')}: {t(viewModeLabels[viewMode])} ▾
             </button>
@@ -1791,19 +1791,19 @@ export default function App() {
 
           <div
             ref={createMenuRef}
-            className="relative flex w-full items-stretch self-stretch md:w-auto md:self-end"
+            className="relative flex min-w-0 w-full items-stretch self-stretch md:w-auto md:self-end"
           >
             <button
               type="button"
               onClick={openDefaultOperationModal}
-              className="flex-1 rounded-l bg-blue-600 px-4 py-2 hover:bg-blue-500 md:flex-none"
+              className="min-w-0 flex-1 truncate rounded-l bg-blue-600 px-2 py-2 text-sm hover:bg-blue-500 md:flex-none md:px-4 md:text-base"
             >
               {t('Nowa operacja')}
             </button>
             <button
               type="button"
               onClick={() => setIsCreateMenuOpen((previous) => !previous)}
-              className="rounded-r border-l border-blue-400/40 bg-blue-600 px-3 py-2 hover:bg-blue-500"
+              className="rounded-r border-l border-blue-400/40 bg-blue-600 px-2 py-2 hover:bg-blue-500 md:px-3"
               aria-label={t('Pokaż dodatkowe opcje')}
               aria-expanded={isCreateMenuOpen}
               aria-haspopup="menu"
@@ -1839,15 +1839,15 @@ export default function App() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
+        <div className="grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-3">
+          <div className="rounded-lg border border-gray-700 bg-gray-800 p-3 sm:p-4">
             <button
               type="button"
               onClick={() => setIsAccountListOpen((prev) => !prev)}
               className="block w-full cursor-pointer text-left"
             >
               <h3 className="text-sm text-gray-400">{t('Saldo całkowite')}</h3>
-              <p className="text-2xl font-bold">{formatCurrency(currentTotalBalance ?? 0, 'PLN')}</p>
+              <p className="text-xl font-bold sm:text-2xl">{formatCurrency(currentTotalBalance ?? 0, 'PLN')}</p>
             </button>
 
             {isAccountListOpen && (
@@ -1905,11 +1905,11 @@ export default function App() {
           </div>
 
           <div
-            className="cursor-pointer rounded-lg border border-gray-700 bg-gray-800 p-4"
+            className="cursor-pointer rounded-lg border border-gray-700 bg-gray-800 p-3 sm:p-4"
             onClick={() => setIsSalaryCardExpanded((prev) => !prev)}
           >
             <h3 className="text-sm text-gray-400">{t('Saldo na dzień następnej wypłaty')}</h3>
-            <p className="text-2xl font-bold">{formatCurrency(salaryTotalBalance, 'PLN')}</p>
+            <p className="text-xl font-bold sm:text-2xl">{formatCurrency(salaryTotalBalance, 'PLN')}</p>
 
             {isSalaryCardExpanded && (
               <div className="mt-3 space-y-2 border-t border-gray-700 pt-3 text-sm">
@@ -1943,12 +1943,12 @@ export default function App() {
           </div>
 
           <div
-            className="cursor-pointer rounded-lg border border-gray-700 bg-gray-800 p-4"
+            className="cursor-pointer rounded-lg border border-gray-700 bg-gray-800 p-3 sm:p-4"
             onClick={() => setIsBudgetCardExpanded((prev) => !prev)}
           >
             <div className="flex items-start justify-between">
               <h3 className="text-sm text-gray-400">{t('Nad / pod kreską')}</h3>
-              <p className={`text-2xl font-bold ${varianceColorClass}`}>{formatCurrency(variance, 'PLN')}</p>
+              <p className={`text-xl font-bold sm:text-2xl ${varianceColorClass}`}>{formatCurrency(variance, 'PLN')}</p>
             </div>
 
             <div className="mt-3 border-t border-gray-700 pt-3">
