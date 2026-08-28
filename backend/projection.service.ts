@@ -1293,20 +1293,26 @@ return this.prisma.transaction.create({
         ? this.toDateString(this.normalizeDate(manualNextSalaryDateSetting.value))
         : null;
 
-      const lastSalaryTx = [...summaryTransactions]
-        .filter(
-          (tx) =>
-            !!tx.isSalaryIncome &&
-            Number(tx.income ?? 0) > 0 &&
-            !!tx.accountId &&
-            includedAccountIds.has(tx.accountId),
-        )
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+      const lastSalaryTx = await this.prisma.transaction.findFirst({
+        where: {
+          isSalaryIncome: true,
+          isCleared: true,
+          income: { gt: 0 },
+          date: { lte: projectionAnchorDate },
+        },
+        orderBy: [{ date: 'desc' }, { id: 'desc' }],
+      });
 
       const computedNextSalaryDate =
         lastSalaryTx ? this.computeNextSalaryDateFromLastSalary(this.normalizeDate(this.toDateString(lastSalaryTx.date))) : null;
 
-      const nextSalaryDate = manualNextSalaryDate || computedNextSalaryDate;
+      const isManualNextSalaryDateValid =
+        manualNextSalaryDate !== null &&
+        this.normalizeDate(manualNextSalaryDate) > projectionAnchorDate;
+
+      const nextSalaryDate = isManualNextSalaryDateValid
+        ? manualNextSalaryDate
+        : computedNextSalaryDate;
 
       const anchorDay =
         fullTimeline.find((day) => day.date === anchorDateStr) ||
