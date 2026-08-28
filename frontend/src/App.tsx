@@ -91,6 +91,9 @@ export default function App() {
   
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
   const createMenuRef = useRef<HTMLDivElement | null>(null);
+  const lastClearedMobileRef = useRef<HTMLElement | null>(null);
+  const lastClearedDesktopRef = useRef<HTMLTableRowElement | null>(null);
+  const lastScrolledOperationDisplayModeRef = useRef<'window' | 'full-range' | null>(null);
 
   useEffect(() => {
     const restoreSession = async () => {
@@ -647,6 +650,39 @@ export default function App() {
 
     return result;
   }, [filteredOperationRows]);
+
+  const lastClearedTransactionId = useMemo(() => {
+    for (let index = tableOperationRows.length - 1; index >= 0; index -= 1) {
+      if (tableOperationRows[index].row.isCleared) {
+        return tableOperationRows[index].row.transactionId;
+      }
+    }
+
+    return null;
+  }, [tableOperationRows]);
+
+  useEffect(() => {
+    if (
+      lastScrolledOperationDisplayModeRef.current === operationDisplayMode ||
+      viewMode !== 'transactions' ||
+      tableOperationRows.length === 0
+    ) {
+      return;
+    }
+
+    lastScrolledOperationDisplayModeRef.current = operationDisplayMode;
+    if (lastClearedTransactionId === null) return;
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      const target = window.matchMedia('(min-width: 768px)').matches
+        ? lastClearedDesktopRef.current
+        : lastClearedMobileRef.current;
+
+      target?.scrollIntoView({ block: 'center' });
+    });
+
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [lastClearedTransactionId, operationDisplayMode, tableOperationRows.length, viewMode]);
 
   const accountTypeOptions = useMemo(() => {
     const map = new Map<number, { id: number; code: string; name: string }>();
@@ -2435,6 +2471,7 @@ export default function App() {
                 return (
                   <article
                     key={transferRows ? `mobile-transfer-${row.transactionId}` : `mobile-${row.rowId}`}
+                    ref={row.transactionId === lastClearedTransactionId ? lastClearedMobileRef : undefined}
                     onClick={() => startEditRow(row)}
                     className="cursor-pointer rounded-lg border border-gray-700 bg-gray-800 p-4 active:bg-gray-700/70"
                   >
@@ -2808,6 +2845,7 @@ export default function App() {
                     return (
                     <tr
                       key={transferRows ? `transfer-${row.transactionId}` : row.rowId}
+                      ref={row.transactionId === lastClearedTransactionId ? lastClearedDesktopRef : undefined}
                       className="cursor-pointer border-b border-gray-700 hover:bg-gray-700/40"
                       onClick={() => startEditRow(row)}
                     >
