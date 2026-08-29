@@ -144,6 +144,8 @@ model Transaction {
   user                         User                 @relation(fields: [userId], references: [id])
   income                       Decimal?             @db.Decimal(10, 2)
   expense                      Decimal?             @db.Decimal(10, 2)
+  incomeFormula                String?              @map("incomeformula") @db.VarChar(500)
+  expenseFormula               String?              @map("expenseformula") @db.VarChar(500)
   type                         String               @default("transaction")
   isCleared                    Boolean              @default(false)
   isSalaryIncome               Boolean              @default(false) @map("issalaryincome")

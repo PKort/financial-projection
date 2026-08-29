@@ -168,6 +168,8 @@ export class ProjectionController {
       info: string;
       income?: number;
       expense?: number;
+      incomeFormula?: string | null;
+      expenseFormula?: string | null;
       type?: string;
       isSalaryIncome?: boolean;
       transactionGroupId?: number | null;
@@ -194,6 +196,8 @@ export class ProjectionController {
       info: string;
       income?: number;
       expense?: number;
+      incomeFormula?: string | null;
+      expenseFormula?: string | null;
       type?: string;
       isSalaryIncome?: boolean;
       transactionGroupId?: number | null;

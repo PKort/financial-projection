@@ -59,6 +59,8 @@ export type TransactionListItem = {
   info: string;
   income: number;
   expense: number;
+  incomeFormula?: string | null;
+  expenseFormula?: string | null;
   type: string;
   isCleared: boolean;
   isSalaryIncome: boolean;
@@ -83,6 +85,8 @@ export type ProjectionRow = {
   accountName: string;
   income: number;
   expense: number;
+  incomeFormula: string | null;
+  expenseFormula: string | null;
   accountBalanceAfter: number | null;
   totalBalanceAfter: number;
   isRecurringGenerated: boolean;

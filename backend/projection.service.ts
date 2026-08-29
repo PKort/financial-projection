@@ -18,6 +18,8 @@ type ProjectionRow = {
   accountName: string;
   income: number;
   expense: number;
+  incomeFormula: string | null;
+  expenseFormula: string | null;
   accountBalanceAfter: number | null;
   totalBalanceAfter: number;
   isRecurringGenerated: boolean;
@@ -40,6 +42,8 @@ type TransactionWithCategory = {
   isSalaryIncome: boolean;
   income: unknown | null;
   expense: unknown | null;
+  incomeFormula: string | null;
+  expenseFormula: string | null;
   accountId: number | null;
   sourceAccountId: number | null;
   destinationAccountId: number | null;
@@ -723,6 +727,8 @@ export class ProjectionService {
     info: string;
     income?: number;
     expense?: number;
+    incomeFormula?: string | null;
+    expenseFormula?: string | null;
     type?: string;
     isSalaryIncome?: boolean;
     transactionGroupId?: number | null;
@@ -783,6 +789,8 @@ return this.prisma.transaction.create({
         type,
         income: income > 0 ? income : null,
         expense: expense > 0 ? expense : null,
+        incomeFormula: income > 0 ? (data.incomeFormula?.slice(0, 500) ?? null) : null,
+        expenseFormula: expense > 0 ? (data.expenseFormula?.slice(0, 500) ?? null) : null,
         accountId: type === 'transfer' ? null : (data.accountId ?? null),
         sourceAccountId: type === 'transfer' ? (data.sourceAccountId ?? null) : null,
         destinationAccountId: type === 'transfer' ? (data.destinationAccountId ?? null) : null,
@@ -810,6 +818,8 @@ return this.prisma.transaction.create({
       info: string;
       income?: number;
       expense?: number;
+      incomeFormula?: string | null;
+      expenseFormula?: string | null;
       type?: string;
       isSalaryIncome?: boolean;
       transactionGroupId?: number | null;
@@ -877,6 +887,8 @@ return this.prisma.transaction.create({
         type,
         income: income > 0 ? income : null,
         expense: expense > 0 ? expense : null,
+        incomeFormula: income > 0 ? (data.incomeFormula?.slice(0, 500) ?? null) : null,
+        expenseFormula: expense > 0 ? (data.expenseFormula?.slice(0, 500) ?? null) : null,
         accountId: type === 'transfer' ? null : (data.accountId ?? null),
         sourceAccountId: type === 'transfer' ? (data.sourceAccountId ?? null) : null,
         destinationAccountId: type === 'transfer' ? (data.destinationAccountId ?? null) : null,
@@ -1662,6 +1674,8 @@ return this.prisma.transaction.create({
           accountName: accountNameMap[tx.sourceAccountId] ?? '',
           income: 0,
           expense: amount,
+          incomeFormula: null,
+          expenseFormula: tx.expenseFormula ?? null,
           accountBalanceAfter: sourceAfter,
           totalBalanceAfter: totalBalanceBefore,
           isRecurringGenerated: !!tx.isGenerated,
@@ -1686,6 +1700,8 @@ return this.prisma.transaction.create({
           accountName: accountNameMap[tx.destinationAccountId] ?? '',
           income: amount,
           expense: 0,
+          incomeFormula: tx.expenseFormula ?? null,
+          expenseFormula: null,
           accountBalanceAfter: destinationAfter,
           totalBalanceAfter: totalBalanceBefore,
           isRecurringGenerated: !!tx.isGenerated,
@@ -1719,6 +1735,8 @@ return this.prisma.transaction.create({
         accountName: accountId ? (accountNameMap[accountId] ?? '') : '',
         income,
         expense,
+        incomeFormula: tx.incomeFormula ?? null,
+        expenseFormula: tx.expenseFormula ?? null,
         accountBalanceAfter: accountId ? after : null,
         totalBalanceAfter: totalAfter,
         isRecurringGenerated: !!tx.isGenerated,

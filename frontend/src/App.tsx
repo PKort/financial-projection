@@ -16,6 +16,7 @@ import type {
   RecurringTemplate, SettingsResponse, TransactionGroup, TransactionListItem, TransactionSubgroup, ViewMode,
 } from './types';
 import { formatCurrency, formatLocalDate, getOperationDisplayInfo } from './utils/formatting';
+import { parseAmountInput } from './utils/amountFormula';
 
 export default function App() {
   const { language, locale, setLanguage, t } = useI18n();
@@ -1314,12 +1315,20 @@ export default function App() {
     if (!formData.date) throw new Error('Podaj datę.');
     if (!formData.income && !formData.expense) throw new Error('Podaj wpłatę lub wypłatę.');
 
+    const income = formData.income ? parseAmountInput(formData.income) : null;
+    const expense = formData.expense ? parseAmountInput(formData.expense) : null;
+    if ((income && income.value <= 0) || (expense && expense.value <= 0)) {
+      throw new Error('Kwota musi być większa od zera.');
+    }
+
     const payload = {
       date: formData.date,
       accountId: Number(formData.accountId),
       info: formData.info,
-      income: formData.income ? Number(formData.income) : 0,
-      expense: formData.expense ? Number(formData.expense) : 0,
+      income: income?.value ?? 0,
+      expense: expense?.value ?? 0,
+      incomeFormula: income?.formula ?? null,
+      expenseFormula: expense?.formula ?? null,
       type: 'transaction',
       isSalaryIncome: formData.isSalaryIncome,
       transactionGroupId: formData.transactionGroupId
@@ -1563,8 +1572,8 @@ export default function App() {
       date: row.date,
       accountId: String(row.accountId || ''),
       info: row.info,
-      income: row.income ? String(row.income) : '',
-      expense: row.expense ? String(row.expense) : '',
+      income: row.incomeFormula || (row.income ? String(row.income) : ''),
+      expense: row.expenseFormula || (row.expense ? String(row.expense) : ''),
       isSalaryIncome: row.isSalaryIncome,
       transactionGroupId: row.transactionGroupId ? String(row.transactionGroupId) : '',
       transactionSubgroupId: row.transactionSubgroupId ? String(row.transactionSubgroupId) : '',
@@ -1585,8 +1594,8 @@ export default function App() {
       sourceAccountId: transaction.sourceAccountId ? String(transaction.sourceAccountId) : '',
       destinationAccountId: transaction.destinationAccountId ? String(transaction.destinationAccountId) : '',
       info: transaction.info,
-      income: transaction.income ? String(transaction.income) : '',
-      expense: transaction.expense ? String(transaction.expense) : '',
+      income: transaction.incomeFormula || (transaction.income ? String(transaction.income) : ''),
+      expense: transaction.expenseFormula || (transaction.expense ? String(transaction.expense) : ''),
       amount: transaction.expense ? String(transaction.expense) : '',
       isSalaryIncome: transaction.isSalaryIncome,
       transactionGroupId: String((pendingCategory ? pendingCategory.groupId : transaction.transactionGroupId) ?? ''),
@@ -2885,12 +2894,12 @@ export default function App() {
                       <td className="p-4 align-middle text-green-400">
                         {transferRows
                           ? transferIn?.income ? formatCurrency(transferIn.income, 'PLN') : ''
-                          : row.income ? formatCurrency(row.income, 'PLN') : ''}
+                          : row.income ? <span title={row.incomeFormula || undefined}>{formatCurrency(row.income, 'PLN')}{row.incomeFormula && <span className="ml-1 text-xs text-gray-400">({row.incomeFormula})</span>}</span> : ''}
                       </td>
                       <td className="p-4 align-middle text-red-400">
                         {transferRows
                           ? transferOut?.expense ? formatCurrency(transferOut.expense, 'PLN') : ''
-                          : row.expense ? formatCurrency(row.expense, 'PLN') : ''}
+                          : row.expense ? <span title={row.expenseFormula || undefined}>{formatCurrency(row.expense, 'PLN')}{row.expenseFormula && <span className="ml-1 text-xs text-gray-400">({row.expenseFormula})</span>}</span> : ''}
                       </td>
                       <td className="p-4 align-middle font-mono">
                         {transferRows ? (
@@ -3229,22 +3238,23 @@ export default function App() {
                   </div>
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                     <input
-                      type="number"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       placeholder={t('Kwota wpłata')}
                       className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                       value={formData.income}
                       onChange={(e) => setFormData({ ...formData, income: e.target.value })}
                     />
                     <input
-                      type="number"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       placeholder={t('Kwota wypłata')}
                       className="w-full rounded border border-gray-700 bg-gray-800 p-2"
                       value={formData.expense}
                       onChange={(e) => setFormData({ ...formData, expense: e.target.value })}
                     />
                   </div>
+                  <p className="text-xs text-gray-400">Możesz wpisać formułę, np. =27+53,50. Obsługiwane są też -, *, / i nawiasy.</p>
                   <label className="flex items-center gap-2 text-sm text-gray-300">
                     <input
                       type="checkbox"
