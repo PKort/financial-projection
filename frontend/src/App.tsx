@@ -78,6 +78,7 @@ export default function App() {
   const [pendingAnalyticsCategories, setPendingAnalyticsCategories] = useState<Record<number, { groupId: number | null; subgroupId: number | null }>>({});
   const [operationDisplayMode, setOperationDisplayMode] = useState<'window' | 'full-range'>('window');
   const [openFilterMenu, setOpenFilterMenu] = useState<null | 'date' | 'account' | 'info' | 'cleared'>(null);
+  const [isPageAtTop, setIsPageAtTop] = useState(true);
   const [transactionFilters, setTransactionFilters] = useState<{
     date: string[];
     account: string[];
@@ -684,6 +685,24 @@ export default function App() {
 
     return () => window.cancelAnimationFrame(animationFrame);
   }, [lastClearedTransactionId, operationDisplayMode, tableOperationRows.length, viewMode]);
+
+  useEffect(() => {
+    const updatePagePosition = () => setIsPageAtTop(window.scrollY <= 80);
+
+    updatePagePosition();
+    window.addEventListener('scroll', updatePagePosition, { passive: true });
+
+    return () => window.removeEventListener('scroll', updatePagePosition);
+  }, []);
+
+  const handleMobilePageNavigation = () => {
+    if (isPageAtTop) {
+      lastClearedMobileRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const accountTypeOptions = useMemo(() => {
     const map = new Map<number, { id: number; code: string; name: string }>();
@@ -3817,6 +3836,29 @@ export default function App() {
             </form>
           </div>
         </div>
+      )}
+
+      {viewMode === 'transactions' && lastClearedTransactionId !== null && (
+        <button
+          type="button"
+          onClick={handleMobilePageNavigation}
+          aria-label={t(isPageAtTop ? 'Przejdź do ostatniej rozliczonej operacji' : 'Przejdź na górę strony')}
+          title={t(isPageAtTop ? 'Przejdź do ostatniej rozliczonej operacji' : 'Przejdź na górę strony')}
+          className="fixed bottom-[calc(1.25rem+env(safe-area-inset-bottom))] right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full border border-gray-600 bg-gray-700/95 text-white shadow-xl backdrop-blur transition hover:bg-gray-600 active:scale-95 md:hidden"
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={`h-7 w-7 transition-transform duration-200 ${isPageAtTop ? 'rotate-180' : ''}`}
+          >
+            <path d="m6 15 6-6 6 6" />
+          </svg>
+        </button>
       )}
 	  
 	  
