@@ -79,6 +79,9 @@ export default function App() {
   const [operationDisplayMode, setOperationDisplayMode] = useState<'window' | 'full-range'>('window');
   const [openFilterMenu, setOpenFilterMenu] = useState<null | 'date' | 'account' | 'info' | 'cleared'>(null);
   const [isPageAtTop, setIsPageAtTop] = useState(true);
+  const [isMobileRangeModalOpen, setIsMobileRangeModalOpen] = useState(false);
+  const [mobileRangeStart, setMobileRangeStart] = useState('');
+  const [mobileRangeEnd, setMobileRangeEnd] = useState('');
   const [transactionFilters, setTransactionFilters] = useState<{
     date: string[];
     account: string[];
@@ -702,6 +705,41 @@ export default function App() {
     }
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const openMobileRangeModal = () => {
+    const isAnalyticsView = viewMode === 'analytics';
+    setMobileRangeStart(isAnalyticsView ? analyticsStart : projectionStart);
+    setMobileRangeEnd(isAnalyticsView ? analyticsEnd : projectionEnd);
+    setIsMobileRangeModalOpen(true);
+  };
+
+  const applyMobileRange = () => {
+    if (!mobileRangeStart || !mobileRangeEnd || mobileRangeStart > mobileRangeEnd) return;
+
+    if (viewMode === 'analytics') {
+      setAnalyticsStart(mobileRangeStart);
+      setAnalyticsEnd(mobileRangeEnd);
+    } else {
+      setProjectionStart(mobileRangeStart);
+      setProjectionEnd(mobileRangeEnd);
+    }
+
+    setIsMobileRangeModalOpen(false);
+  };
+
+  const setMobileRangeToCurrentMonth = () => {
+    const now = new Date();
+    setMobileRangeStart(formatLocalDate(new Date(now.getFullYear(), now.getMonth(), 1)));
+    setMobileRangeEnd(formatLocalDate(new Date(now.getFullYear(), now.getMonth() + 1, 0)));
+  };
+
+  const setMobileRangeToThirtyDays = () => {
+    const end = new Date();
+    const start = new Date(end);
+    start.setDate(start.getDate() - 29);
+    setMobileRangeStart(formatLocalDate(start));
+    setMobileRangeEnd(formatLocalDate(end));
   };
 
   const accountTypeOptions = useMemo(() => {
@@ -1753,10 +1791,66 @@ export default function App() {
       <div className="mx-auto max-w-7xl space-y-5 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:space-y-6 sm:p-6">
         <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 md:grid-cols-[1fr_auto_1fr] md:items-start md:gap-4">
           <div className="order-2 col-span-2 flex min-w-0 flex-col gap-2 md:order-none md:col-span-1 md:justify-self-start">
-            <div className="text-xs text-gray-400">
+            <div className="hidden text-xs text-gray-400 md:block">
               {t(viewMode === 'analytics' ? 'Zakres analizy' : 'Zakres projekcji')}
             </div>
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-[auto_auto_auto]">
+            <div className="flex h-11 min-w-0 gap-2 md:hidden">
+              <button
+                type="button"
+                onClick={openMobileRangeModal}
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-gray-700 bg-gray-800 px-3 text-left hover:bg-gray-700"
+                aria-label={t(viewMode === 'analytics' ? 'Zmień zakres analizy' : 'Zmień zakres projekcji')}
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5 shrink-0 text-blue-400">
+                  <rect x="3" y="5" width="18" height="16" rx="2" />
+                  <path d="M16 3v4M8 3v4M3 10h18" />
+                </svg>
+                <span className="min-w-0">
+                  <span className="block truncate text-[10px] leading-3 text-gray-400">
+                    {t(viewMode === 'analytics' ? 'Zakres analizy' : 'Zakres projekcji')}
+                  </span>
+                  <span className="block truncate text-sm font-medium">
+                    {formatDisplayDate(viewMode === 'analytics' ? analyticsStart : projectionStart)} – {formatDisplayDate(viewMode === 'analytics' ? analyticsEnd : projectionEnd)}
+                  </span>
+                </span>
+              </button>
+
+              <button
+                type="button"
+                disabled={viewMode === 'analytics' && analyticsLoading}
+                onClick={viewMode === 'analytics' ? refreshAnalytics : fetchData}
+                className="flex w-11 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-60"
+                aria-label={t(viewMode === 'analytics' && analyticsLoading ? 'Odświeżanie…' : 'Odśwież')}
+                title={t('Odśwież')}
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" className={`h-5 w-5 ${analyticsLoading && viewMode === 'analytics' ? 'animate-spin' : ''}`}>
+                  <path d="M20 6v5h-5" />
+                  <path d="M4 18v-5h5" />
+                  <path d="M18.5 9A7 7 0 0 0 6 6.5L4 9M5.5 15A7 7 0 0 0 18 17.5l2-2.5" />
+                </svg>
+              </button>
+
+              {viewMode !== 'analytics' && (
+                <button
+                  type="button"
+                  aria-pressed={operationDisplayMode === 'full-range'}
+                  aria-label={t(operationDisplayMode === 'window' ? 'Pokaż pełen zakres' : 'Pokaż widok skrócony')}
+                  title={t(operationDisplayMode === 'window' ? 'Widok skrócony' : 'Pełen zakres')}
+                  onClick={() => setOperationDisplayMode((current) => current === 'window' ? 'full-range' : 'window')}
+                  className={`flex w-11 shrink-0 items-center justify-center rounded-lg border text-gray-100 ${operationDisplayMode === 'full-range' ? 'border-blue-500 bg-blue-900/60 text-blue-200' : 'border-gray-700 bg-gray-800 hover:bg-gray-700'}`}
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+                    {operationDisplayMode === 'window' ? (
+                      <><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" /><path d="m3 8 5-5m13 5-5-5M3 16l5 5m13-5-5 5" /></>
+                    ) : (
+                      <><path d="M9 9H4V4M15 9h5V4M9 15H4v5M15 15h5v5" /><path d="M4 4l5 5m11-5-5 5M4 20l5-5m11 5-5-5" /></>
+                    )}
+                  </svg>
+                </button>
+              )}
+            </div>
+
+            <div className="hidden grid-cols-2 gap-2 md:grid md:grid-cols-[auto_auto_auto]">
               {viewMode === 'analytics' ? (
                 <>
                   <input aria-label={t('Data początkowa analizy')} type="date" className="min-w-0 rounded border border-gray-700 bg-gray-800 px-2 py-2 text-sm sm:px-3" value={analyticsStart} max={analyticsEnd || undefined} onChange={(event) => setAnalyticsStart(event.target.value)} />
@@ -3835,6 +3929,86 @@ export default function App() {
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {isMobileRangeModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end bg-black/65 md:hidden"
+          onClick={() => setIsMobileRangeModalOpen(false)}
+          role="presentation"
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-range-title"
+            onClick={(event) => event.stopPropagation()}
+            className="w-full rounded-t-2xl border-t border-gray-700 bg-gray-900 px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3 shadow-2xl"
+          >
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gray-600" />
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h2 id="mobile-range-title" className="text-lg font-semibold">
+                  {t(viewMode === 'analytics' ? 'Zakres analizy' : 'Zakres projekcji')}
+                </h2>
+                <p className="text-xs text-gray-400">{t('Wybierz datę początkową i końcową')}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMobileRangeModalOpen(false)}
+                aria-label={t('Zamknij')}
+                className="flex h-9 w-9 items-center justify-center rounded-full text-2xl text-gray-400 hover:bg-gray-800 hover:text-white"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mb-4 grid grid-cols-2 gap-2">
+              <button type="button" onClick={setMobileRangeToCurrentMonth} className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm hover:bg-gray-700">
+                {t('Ten miesiąc')}
+              </button>
+              <button type="button" onClick={setMobileRangeToThirtyDays} className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm hover:bg-gray-700">
+                {t('Ostatnie 30 dni')}
+              </button>
+            </div>
+
+            <form onSubmit={(event) => { event.preventDefault(); applyMobileRange(); }}>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="min-w-0 text-xs text-gray-400">
+                  {t('Od')}
+                  <input
+                    type="date"
+                    value={mobileRangeStart}
+                    max={mobileRangeEnd || undefined}
+                    onChange={(event) => setMobileRangeStart(event.target.value)}
+                    className="mt-1 w-full min-w-0 rounded-lg border border-gray-700 bg-gray-800 px-2 py-3 text-sm text-gray-100"
+                  />
+                </label>
+                <label className="min-w-0 text-xs text-gray-400">
+                  {t('Do')}
+                  <input
+                    type="date"
+                    value={mobileRangeEnd}
+                    min={mobileRangeStart || undefined}
+                    onChange={(event) => setMobileRangeEnd(event.target.value)}
+                    className="mt-1 w-full min-w-0 rounded-lg border border-gray-700 bg-gray-800 px-2 py-3 text-sm text-gray-100"
+                  />
+                </label>
+              </div>
+
+              {mobileRangeStart && mobileRangeEnd && mobileRangeStart > mobileRangeEnd && (
+                <p className="mt-2 text-sm text-red-300">{t('Data początkowa nie może być późniejsza niż data końcowa.')}</p>
+              )}
+
+              <button
+                type="submit"
+                disabled={!mobileRangeStart || !mobileRangeEnd || mobileRangeStart > mobileRangeEnd}
+                className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-3 font-medium hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {t('Zastosuj')}
+              </button>
+            </form>
+          </section>
         </div>
       )}
 
