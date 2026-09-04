@@ -13,10 +13,11 @@ import {
 import type {
   Account, ActiveTab, AuthUser, CategoryFormMode, CategoryFormState, FormDataState, ManagedUserForm,
   ProjectionDay, ProjectionDefaultRangeResponse, ProjectionResponse, ProjectionRow, ProjectionSummary,
-  RecurringTemplate, SettingsResponse, TransactionGroup, TransactionListItem, TransactionSubgroup, ViewMode,
+  ReceiptAnalysis, RecurringTemplate, SettingsResponse, TransactionGroup, TransactionListItem, TransactionSubgroup, ViewMode,
 } from './types';
 import { formatCurrency, formatLocalDate, getOperationDisplayInfo } from './utils/formatting';
 import { parseAmountInput } from './utils/amountFormula';
+import { prepareReceiptImage } from './utils/receiptImage';
 
 export default function App() {
   const { language, locale, setLanguage, t } = useI18n();
@@ -44,6 +45,9 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isReceiptScanning, setIsReceiptScanning] = useState(false);
+  const [receiptWarnings, setReceiptWarnings] = useState<string[]>([]);
+  const [receiptError, setReceiptError] = useState('');
   const [editingTransactionId, setEditingTransactionId] = useState<number | null>(null);
   const [editingFromAnalytics, setEditingFromAnalytics] = useState(false);
   const [editingTemplateId, setEditingTemplateId] = useState<number | null>(null);
@@ -52,6 +56,7 @@ export default function App() {
   const [isSalaryCardExpanded, setIsSalaryCardExpanded] = useState(false);
   const [isBudgetCardExpanded, setIsBudgetCardExpanded] = useState(false);
   const [manualNextSalaryDateInput, setManualNextSalaryDateInput] = useState('');
+  const [receiptDefaultAccountInput, setReceiptDefaultAccountInput] = useState('');
   const [selectedCurrentBalanceAccountIds, setSelectedCurrentBalanceAccountIds] = useState<number[]>([]);
   const [selectedSalaryBalanceAccountIds, setSelectedSalaryBalanceAccountIds] = useState<number[]>([]);
   const [projectionStart, setProjectionStart] = useState('');
@@ -96,6 +101,7 @@ export default function App() {
   
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
   const createMenuRef = useRef<HTMLDivElement | null>(null);
+  const receiptInputRef = useRef<HTMLInputElement | null>(null);
   const lastClearedMobileRef = useRef<HTMLElement | null>(null);
   const lastClearedDesktopRef = useRef<HTMLTableRowElement | null>(null);
   const lastScrolledOperationDisplayModeRef = useRef<'window' | 'full-range' | null>(null);
@@ -193,6 +199,7 @@ export default function App() {
       }
       setDailyBudgetInput(settingsData.daily_budget ?? '130');
       setManualNextSalaryDateInput(settingsData.manual_next_salary_date ?? '');
+      setReceiptDefaultAccountInput(settingsData.receipt_default_account_id ?? '');
     } catch (err: any) {
       console.error(err);
       setErrorMessage(err?.message ?? 'Nie udało się pobrać danych z API.');
@@ -1167,6 +1174,55 @@ export default function App() {
     setEditingFromAnalytics(false);
     setEditingTemplateId(null);
     setEditingAccountId(null);
+    setReceiptWarnings([]);
+    setReceiptError('');
+  };
+
+  const handleReceiptSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+      setIsReceiptScanning(true);
+      setReceiptWarnings([]);
+      setReceiptError('');
+      setErrorMessage('');
+      const preparedImage = await prepareReceiptImage(file);
+      const requestBody = new FormData();
+      requestBody.append('receipt', preparedImage, 'receipt.jpg');
+      const response = await fetch('/api/receipts/analyze', { method: 'POST', body: requestBody });
+      if (!response.ok) throw new Error(await getErrorText(response));
+
+      const result: ReceiptAnalysis = await response.json();
+      const suggestedAccount = result.suggestion.accountId != null && accounts.some((account) => account.id === result.suggestion.accountId)
+        ? String(result.suggestion.accountId)
+        : '';
+      const suggestedGroup = result.suggestion.transactionGroupId != null && transactionGroups.some(
+        (group) => group.id === result.suggestion.transactionGroupId && group.isActive,
+      ) ? String(result.suggestion.transactionGroupId) : '';
+      const suggestedSubgroup = suggestedGroup && result.suggestion.transactionSubgroupId != null && transactionGroups
+        .find((group) => String(group.id) === suggestedGroup)?.subgroups.some(
+          (subgroup) => subgroup.id === result.suggestion.transactionSubgroupId && subgroup.isActive,
+        ) ? String(result.suggestion.transactionSubgroupId) : '';
+
+      setFormData((current) => ({
+        ...current,
+        date: result.date.value ?? current.date,
+        accountId: suggestedAccount || current.accountId,
+        info: result.merchant.value ?? current.info,
+        income: '',
+        expense: result.total.value != null ? result.total.value.toFixed(2).replace('.', ',') : current.expense,
+        transactionGroupId: suggestedGroup || current.transactionGroupId,
+        transactionSubgroupId: suggestedGroup ? suggestedSubgroup : current.transactionSubgroupId,
+      }));
+      setInfoSuggestion(null);
+      setReceiptWarnings(result.warnings);
+    } catch (error: any) {
+      setReceiptError(error?.message ?? 'Nie udało się przeanalizować paragonu.');
+    } finally {
+      setIsReceiptScanning(false);
+    }
   };
 
   const closeCategoryModal = () => {
@@ -1572,6 +1628,22 @@ export default function App() {
     } catch (err) {
       console.error(err);
       setErrorMessage('Nie udało się zapisać budżetu dziennego.');
+    }
+  };
+
+  const saveReceiptDefaultAccount = async () => {
+    try {
+      setErrorMessage('');
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'receipt_default_account_id', value: receiptDefaultAccountInput }),
+      });
+      if (!res.ok) throw new Error(await getErrorText(res));
+      await fetchData();
+      setSuccessMessage('Domyślne konto dla paragonów zostało zapisane.');
+    } catch (err: any) {
+      setErrorMessage(err?.message ?? 'Nie udało się zapisać domyślnego konta.');
     }
   };
 
@@ -2164,6 +2236,27 @@ export default function App() {
                       className="rounded bg-emerald-600 px-4 py-2 hover:bg-emerald-500"
                     >
                       Zapisz
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-gray-300">{t('Domyślne konto dla paragonów')}</div>
+                  <div className="flex gap-2">
+                    <select
+                      className="w-full rounded bg-gray-700 px-3 py-2"
+                      value={receiptDefaultAccountInput}
+                      onChange={(e) => setReceiptDefaultAccountInput(e.target.value)}
+                    >
+                      <option value="">{t('Brak domyślnego konta')}</option>
+                      {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+                    </select>
+                    <button
+                      onClick={saveReceiptDefaultAccount}
+                      type="button"
+                      className="rounded bg-emerald-600 px-4 py-2 hover:bg-emerald-500"
+                    >
+                      {t('Zapisz')}
                     </button>
                   </div>
                 </div>
@@ -3212,8 +3305,8 @@ export default function App() {
       </div>
 		
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-2xl rounded-xl border border-gray-700 bg-gray-900 p-6">
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-2 sm:items-center sm:p-4">
+          <div className="my-2 max-h-[calc(100dvh-1rem)] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-xl border border-gray-700 bg-gray-900 p-4 sm:my-0 sm:max-h-[calc(100dvh-2rem)] sm:p-6">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-xl font-semibold">
                 {activeTab === 'transaction' && t(editingTransactionId ? 'Edytuj transakcję' : 'Dodaj operację')}
@@ -3268,6 +3361,39 @@ export default function App() {
             <form className="space-y-4" onSubmit={handleSubmit}>
               {activeTab === 'transaction' && (
                 <>
+                  {!editingTransactionId && (
+                    <div className="rounded-lg border border-gray-700 bg-gray-800/60 p-3">
+                      <input
+                        ref={receiptInputRef}
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        className="hidden"
+                        onChange={handleReceiptSelected}
+                      />
+                      <button
+                        type="button"
+                        disabled={isReceiptScanning}
+                        onClick={() => receiptInputRef.current?.click()}
+                        className="w-full rounded bg-emerald-700 px-4 py-2 font-medium hover:bg-emerald-600 disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {isReceiptScanning ? t('Analizowanie paragonu…') : t('Skanuj paragon')}
+                      </button>
+                      <p className="mt-2 text-xs text-gray-400">
+                        {t('Zdjęcie jest analizowane lokalnie i nie jest zapisywane.')}
+                      </p>
+                      {receiptError && (
+                        <div className="mt-2 rounded border border-red-800 bg-red-950/60 p-2 text-sm text-red-200" role="alert">
+                          {receiptError}
+                        </div>
+                      )}
+                      {receiptWarnings.length > 0 && (
+                        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-300">
+                          {receiptWarnings.map((warning) => <li key={warning}>{warning}</li>)}
+                        </ul>
+                      )}
+                    </div>
+                  )}
                   <input
                     type="date"
                     className="w-full rounded border border-gray-700 bg-gray-800 p-2"
@@ -3776,7 +3902,7 @@ export default function App() {
                 </>
               )}
 
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="sticky bottom-0 -mx-4 flex justify-end gap-2 border-t border-gray-700 bg-gray-900 px-4 pb-1 pt-3 sm:-mx-6 sm:px-6">
                 <button
                   type="button"
                   onClick={closeModal}

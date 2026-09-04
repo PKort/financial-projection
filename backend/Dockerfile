@@ -1,7 +1,7 @@
 FROM node:20-alpine
 # Dodaj tę linię, aby doinstalować wymaganą przez Prismę bibliotekę libssl.so.1.1
 # RUN apk add --no-cache compat-openssl11
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl tesseract-ocr tesseract-ocr-data-pol tesseract-ocr-data-eng
 WORKDIR /app
 COPY package*.json ./
 RUN npm install

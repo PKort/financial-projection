@@ -1,5 +1,9 @@
 # Financial Projection
 
+## Receipt scanning
+
+New expenses can be prefilled from a receipt photo. Recognition runs locally in the backend using Tesseract (`pol+eng`); receipt images are processed in memory and are not retained. The Docker backend image includes the required OCR engine and language data. When running the backend directly on the host, install Tesseract 5 with Polish and English language packs.
+
 Web application for managing personal finances and projecting account balances. It supports accounts, transactions, transfers, recurring payments, expense categories, daily-budget calculations, multiple users and Polish/English UI.
 
 > The project is under active development. Before exposing an instance publicly, review the security notes and replace all example credentials.

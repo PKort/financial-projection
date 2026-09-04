@@ -46,6 +46,14 @@ This isolation is part of the security boundary. New financial models and Prisma
 
 Polish and English UI strings are managed by `frontend/src/i18n/I18nProvider.tsx`. The locale is stored locally for the login screen and in the authenticated user's `ui_locale` setting. User-created names and descriptions are not translated.
 
+### Local receipt scanning
+
+The transaction form can capture or select a receipt photo. The browser scales it down and converts it to JPEG before sending it as multipart form data to `POST /api/receipts/analyze`.
+
+The backend keeps the image in memory and passes it through standard input to a local Tesseract process using the Polish and English language models. It does not write receipt images to the database or filesystem. `ReceiptService` extracts the merchant, transaction date and final amount, then uses the tenant-scoped transaction history to suggest an account and category. Analysis only fills a draft: the user must review and save it through the regular transaction endpoint.
+
+The backend Docker image contains Tesseract and both language packs. Developers running the backend outside Docker need `tesseract`, `pol` and `eng` language data available on `PATH`.
+
 ## Schema changes
 
 Every database change should include:

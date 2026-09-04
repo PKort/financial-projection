@@ -143,6 +143,18 @@ export type RecurringTemplate = {
 
 export type SettingsResponse = Record<string, string>;
 
+export type ReceiptAnalysis = {
+  merchant: { value: string | null; confidence: 'low' | 'medium' | 'high' | null; evidence: string | null };
+  date: { value: string | null; confidence: 'low' | 'medium' | 'high' | null; evidence: string | null };
+  total: { value: number | null; currency: 'PLN'; confidence: 'low' | 'medium' | 'high' | null; evidence: string | null };
+  suggestion: {
+    accountId: number | null;
+    transactionGroupId: number | null;
+    transactionSubgroupId: number | null;
+  };
+  warnings: string[];
+};
+
 export type FormDataState = {
   date: string;
   startDate: string;
