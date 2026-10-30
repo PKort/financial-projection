@@ -5,6 +5,7 @@ export type Language = 'pl' | 'en';
 const STORAGE_KEY = 'projection_ui_locale';
 
 const en: Record<string, string> = {
+  'Składowe kwoty': 'Amount breakdown',
   'Projekcja finansowa': 'Financial projection',
   'Zaloguj się, aby przejść do swoich danych.': 'Sign in to access your data.',
   'Nazwa użytkownika': 'Username',

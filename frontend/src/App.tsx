@@ -3,6 +3,7 @@ import { apiFetch as fetch, getErrorText } from './api/client';
 import { AnalyticsBar, PieDonutChart } from './components/analytics/Charts';
 import { AdminPanel } from './components/admin/AdminPanel';
 import { DeleteIcon, EditIcon, IconButton } from './components/common/Icons';
+import { AmountWithBreakdown } from './components/common/AmountWithBreakdown';
 import { LoginScreen } from './components/LoginScreen';
 import { UserMenu } from './components/user/UserMenu';
 import { useI18n } from './i18n/I18nProvider';
@@ -3100,12 +3101,12 @@ export default function App() {
                       <td className="p-4 align-middle text-green-400">
                         {transferRows
                           ? transferIn?.income ? formatCurrency(transferIn.income, 'PLN') : ''
-                          : row.income ? <span title={row.incomeFormula || undefined}>{formatCurrency(row.income, 'PLN')}{row.incomeFormula && <span className="ml-1 text-xs text-gray-400">({row.incomeFormula})</span>}</span> : ''}
+                          : row.income ? <AmountWithBreakdown amount={row.income} formula={row.incomeFormula} /> : ''}
                       </td>
                       <td className="p-4 align-middle text-red-400">
                         {transferRows
                           ? transferOut?.expense ? formatCurrency(transferOut.expense, 'PLN') : ''
-                          : row.expense ? <span title={row.expenseFormula || undefined}>{formatCurrency(row.expense, 'PLN')}{row.expenseFormula && <span className="ml-1 text-xs text-gray-400">({row.expenseFormula})</span>}</span> : ''}
+                          : row.expense ? <AmountWithBreakdown amount={row.expense} formula={row.expenseFormula} /> : ''}
                       </td>
                       <td className="p-4 align-middle font-mono">
                         {transferRows ? (
