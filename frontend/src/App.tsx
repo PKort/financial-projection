@@ -2683,6 +2683,8 @@ export default function App() {
                 const transferOut = transferRows?.find((item) => item.transferSide === 'out');
                 const transferIn = transferRows?.find((item) => item.transferSide === 'in');
                 const isTransfer = Boolean(transferRows);
+                const hasBothAmounts = Boolean(row.income && row.expense);
+                const netAmount = Math.round((row.income - row.expense) * 100) / 100;
 
                 return (
                   <article
@@ -2715,8 +2717,8 @@ export default function App() {
                     ) : (
                       <div className="mt-3 flex items-end justify-between gap-3 border-t border-gray-700 pt-3">
                         <div className="text-sm text-gray-400">Saldo konta: {row.accountBalanceAfter !== null ? formatCurrency(row.accountBalanceAfter, 'PLN') : '—'}</div>
-                        <div className={`shrink-0 font-mono text-lg ${row.income ? 'text-green-400' : 'text-red-400'}`}>
-                          {row.income ? `+ ${formatCurrency(row.income, 'PLN')}` : `− ${formatCurrency(row.expense, 'PLN')}`}
+                        <div className={`shrink-0 font-mono text-lg ${hasBothAmounts ? 'italic' : ''} ${netAmount > 0 ? 'text-green-400' : netAmount < 0 ? 'text-red-400' : 'text-gray-300'}`}>
+                          {netAmount > 0 ? '+ ' : netAmount < 0 ? '− ' : ''}{formatCurrency(Math.abs(netAmount), 'PLN')}
                         </div>
                       </div>
                     )}
